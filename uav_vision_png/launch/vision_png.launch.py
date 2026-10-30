@@ -31,7 +31,7 @@ def generate_launch_description():
 
     declare_csv = DeclareLaunchArgument(
         'csv_path',
-        default_value='/home/ake/SJTU/graduation project/FPV-Intercept/vpng_intercept_stats.csv',
+        default_value='/home/ake/SJTU/graduation-project/FPV-Intercept/vpng_intercept_stats.csv',
         description='拦截统计 CSV 输出路径')
 
     vision_png_node = Node(

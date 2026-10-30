@@ -78,17 +78,6 @@ source install/setup.bash
 
 #### 启动顺序
 
-先完成 PX4、Gazebo、ROS 2 Humble 和 MicroXRCEAgent 的安装。若只想编译键盘节点及其工作空间依赖，可在本仓库根目录执行下面的命令；无需编译视觉/RL 包或加载 ONNX 模型。
-这一步仅编译 ROS 包，不能替代 PX4 和仿真依赖的安装。
-
-```bash
-cd /home/ake/SJTU/graduation-project/FPV-gazebo_sim
-source /opt/ros/humble/setup.bash
-colcon build --symlink-install
-source install/setup.bash
-ros2 pkg executables uav_keyboard_control
-```
-
 1. **终端 1：只启动仿真底座。** `setup_workspace.sh` 已复制资源；若尚未复制，先执行
    下列两个 `cp`。修改本仓库的脚本或世界文件后，也要重新复制。
 
@@ -192,6 +181,9 @@ ros2 topic echo /px4_1/fmu/out/vehicle_local_position \
    ```
 
    该脚本会自动启动 Gazebo 仿真服务器、两架无人机（px4_1 拦截机 + px4_2 目标机）、MicroXRCEAgent 以及相机话题桥接。
+   启动和退出时，会额外按完整命令行清理当前用户的 `gz sim` 服务端和图形界面，
+   避免系统进程名为 `ruby` 而被原来的 `killall` 漏掉。启动流程保持原样，
+   不检查 `px4_msgs`，无需为启动此脚本额外加载本工作空间。
 
    **启动目标节点前，打开 QGroundControl 并等待两架飞机通过 UDP 14550 自动连接。**
    本机安装位置为：
@@ -322,7 +314,7 @@ flowchart LR
    为 DDS 增加 `hover_thrust_estimate` 导出，最后构建 `px4_sitl_default`。
 3. [run_swarm.sh](run_swarm.sh) 启动 Agent，再启动带相机的 PX4 实例 1：
    `PX4_SYS_AUTOSTART=4002`、`PX4_SIM_MODEL=gz_x500_depth`、`px4 -i 1`，
-   由它启动 `grass_world`；相机就绪后，再启动普通 x500 的实例 2：
+   由它启动 `grass_world`；等待 15 秒并启动相机桥接后，再启动普通 x500 的实例 2：
    `PX4_SYS_AUTOSTART=4001`、`PX4_SIM_MODEL=gz_x500`、`px4 -i 2`。
    第二个实例设置 `PX4_GZ_STANDALONE=1`，连接同一个 Gazebo 世界。
 

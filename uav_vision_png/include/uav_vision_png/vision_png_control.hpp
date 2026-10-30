@@ -275,7 +275,7 @@ private:
 
     // CSV 文件
     std::ofstream csv_file_;
-    std::string   csv_path_ = "/home/ake/SJTU/graduation project/FPV-Intercept/vpng_intercept_stats.csv";
+    std::string   csv_path_ = "/home/ake/SJTU/graduation-project/FPV-Intercept/vpng_intercept_stats.csv";
 
     // 拦截统计摘要
     struct InterceptStats {

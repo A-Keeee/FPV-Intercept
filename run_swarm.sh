@@ -33,6 +33,8 @@ LOG_MAX_FILES=2
 # -------------------------------------------------------
 echo "🧹 正在清理残留进程..."
 killall -9 px4 gz-sim gz-server gz-client MicroXRCEAgent parameter_bridge 2>/dev/null || true
+# gz sim 的进程名可能是 ruby，按命令行同时清理服务端和 GUI。
+pkill -9 -u "$UID" -f '^([^[:space:]]*/)?gz[[:space:]]+sim([[:space:]]|$)' 2>/dev/null || true
 sleep 2
 
 # 清理旧日志
@@ -144,6 +146,8 @@ cleanup() {
     kill "$PID1" "$PID2" "$PID_AGENT" "$PID_BRIDGE" 2>/dev/null || true
     sleep 1
     killall -9 px4 gz-sim gz-server gz-client MicroXRCEAgent parameter_bridge 2>/dev/null || true
+    # gz sim 的进程名可能是 ruby，按命令行同时清理服务端和 GUI。
+    pkill -9 -u "$UID" -f '^([^[:space:]]*/)?gz[[:space:]]+sim([[:space:]]|$)' 2>/dev/null || true
     echo "✅ 清理完成"
     exit 0
 }
