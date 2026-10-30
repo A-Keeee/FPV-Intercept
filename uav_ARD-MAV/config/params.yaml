@@ -1,0 +1,42 @@
+uav_ard_mav:
+  ros__parameters:
+    image_topic: /camera/image
+    result_topic: /camera_detect_result
+    debug_topic: /uav_ard_mav/debug_image
+    global_model: models/global_best.onnx
+    local_model: models/local_multiscale_ft_20261030.onnx
+    # local_model: models/global_best.onnx # Previous configuration: reuse the global detector locally.
+    # local_model: models/local_best.onnx
+    classifier_model: models/Net_best.onnx
+    provider: cpu # cuda requires the ONNX Runtime CUDA provider and matching CUDA/cuDNN.
+    device_id: 0
+    threads: 4
+    publish_rate: 60.0
+    image_timeout: 0.5
+    show: true
+    imgsz: 640
+    global_conf: 0.3
+    local_conf: 0.1
+    crop_size: 300
+    roi_growth: 4
+    local_patience: 30
+    kalman:
+      # Same implementation choices as tracking/configs/track_glad.yaml, not paper ground truth.
+      process_noise: 0.01
+      measurement_noise: 1.0
+      initial_covariance: 1.0
+    motion:
+      grid_columns: 30
+      grid_rows: 20
+      ransac_threshold: 3.0
+      min_matches: 9
+      difference_threshold: 5.0
+      light_coefficient: 1.0
+      background_coefficient: 0.1
+      min_area: 30
+      merge_distance: 15.0
+      angle_variance: 0.8
+      speed_variance: 0.8
+      min_speed: 1.0
+      open_iterations: 1
+      close_iterations: 3

@@ -35,7 +35,7 @@ PX4 / ROS 2 接口适配、一键启动与就绪检查等内容为当前版本�
 
 该系统在 ROS 2 环境下开发，结合 PX4 固件与 Gazebo 仿真器，实现了从目标发现到仿真拦截的全链路闭环。主要功能包括：
 
-*   **视觉目标检测**：利用训练的 YOLO 模型和跟踪模型（LightTrack）实时识别并跟踪视场内的无人机目标。
+*   **视觉目标检测**：使用 ARD-MAV 的全局／局部 YOLO26、运动检测级联和卡尔曼搜索，实时识别并跟踪视场内的无人机目标。
 *   **比例导引制导**：基于比例导引律（Proportional Navigation Guidance, PNG）生成拦截轨迹，实现对动态目标的精确前置拦截。
 *   **仿真验证体系**：基于 PX4 软件在环（SITL）搭建，支持在 Gazebo 环境中进行算法的离线验证与参数调优。
 *   **数据分析工具**：内置运动学与视觉指标记录脚本，用于定量评估制导律精度与视觉追踪稳定性。
@@ -56,7 +56,7 @@ PX4 使用 `v1.16.0`，`px4_msgs` 使用 `release/1.16`，状态订阅使用
 在仓库根目录依次执行：
 
 ```bash
-cd "/home/ake/SJTU/graduation project/FPV-Intercept"
+cd "/home/ake/SJTU/graduation-project/FPV-Intercept"
 
 # 安装系统包，替换旧 Gazebo/ros_gz，并安装 CUDA 13 的 ONNX Runtime C++ 库。
 sudo bash scripts/install_system_dependencies.sh
@@ -241,8 +241,13 @@ PX4 目录可通过 `PX4_DIR=/path/to/PX4-Autopilot ./start.sh` 指定。
 
 3. **启动视觉检测**:
    ```bash
+   ros2 launch uav_ard_mav ard_mav.launch.py
    ros2 run uav_vision_dectect uav_vision_dectect
    ```
+   使用 [uav_ARD-MAV](uav_ARD-MAV/README.md) 的 ROS 2 / C++ 节点替代原检测节点，
+   迁移 ARD-MAV 的全局／局部 YOLO26、运动检测级联和卡尔曼搜索。
+   首次运行先执行 `colcon build --packages-up-to uav_ard_mav` 并重新加载 `install/setup.bash`。
+   `/camera/image` 与 `/camera_detect_result` 接口保持兼容；两个检测节点应二选一运行。
 ---
 
 ---

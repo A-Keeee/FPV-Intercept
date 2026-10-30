@@ -59,7 +59,7 @@ sleep 3
 # -------------------------------------------------------
 echo ""
 echo "[3/5] 启动视觉检测..."
-ros2 run uav_vision_dectect uav_vision_dectect &
+ros2 launch uav_ard_mav ard_mav.launch.py &
 DETECT_PID=$!
 echo "  检测 PID: $DETECT_PID"
 sleep 2

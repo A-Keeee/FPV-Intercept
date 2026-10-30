@@ -10,7 +10,7 @@
 
 
 // 定义模型路径 (建议改为 ROS2 参数加载)
-const std::string YOLO_ENGINE_PATH = "/home/ake/SJTU/graduation project/FPV-Intercept/uav_vision_dectect/model/yolov5/GDUT_UAV.onnx";
+const std::string YOLO_ENGINE_PATH = "/home/ake/SJTU/graduation-project/FPV-Intercept/uav_vision_dectect/model/yolov5/GDUT_UAV.onnx";
 
 void UavTopicSubscrib::initTensorRT()
 {
@@ -45,8 +45,8 @@ UavTopicSubscrib::~UavTopicSubscrib()
 UavTopicSubscrib::UavTopicSubscrib() : Node("uav_vision_dectect")
 {
     /***********************************局部跟踪器初始化***********************************/
-    std::string init_model = "/home/ake/SJTU/graduation project/FPV-Intercept/uav_vision_dectect/model/light_track/lighttrack_init";
-    std::string update_model = "/home/ake/SJTU/graduation project/FPV-Intercept/uav_vision_dectect/model/light_track/lighttrack_update";
+    std::string init_model = "/home/ake/SJTU/graduation-project/FPV-Intercept/uav_vision_dectect/model/light_track/lighttrack_init";
+    std::string update_model = "/home/ake/SJTU/graduation-project/FPV-Intercept/uav_vision_dectect/model/light_track/lighttrack_update";
 
     siam_tracker = new LightTrack(init_model.c_str(), update_model.c_str());
 

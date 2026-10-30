@@ -1,0 +1,48 @@
+cmake_minimum_required(VERSION 3.16)
+project(uav_ard_mav)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  add_compile_options(-Wall -Wextra -Wpedantic)
+endif()
+
+find_package(ament_cmake REQUIRED)
+find_package(ament_index_cpp REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
+find_package(cv_bridge REQUIRED)
+find_package(uav_common_msg REQUIRED)
+find_package(OpenCV REQUIRED COMPONENTS core imgproc video calib3d dnn videoio highgui)
+find_package(Threads REQUIRED)
+set(ONNXRUNTIME_ROOT "/usr/local" CACHE PATH "ONNX Runtime C++ installation prefix")
+find_path(ONNXRUNTIME_INCLUDE_DIR onnxruntime_cxx_api.h
+  HINTS "${ONNXRUNTIME_ROOT}/include" PATH_SUFFIXES onnxruntime onnxruntime/core/session REQUIRED)
+find_library(ONNXRUNTIME_LIBRARY onnxruntime HINTS "${ONNXRUNTIME_ROOT}/lib" "${ONNXRUNTIME_ROOT}/lib64" REQUIRED)
+
+add_library(ard_mav_core STATIC src/onnx_models.cpp src/motion.cpp src/tracker.cpp)
+target_include_directories(ard_mav_core PUBLIC include ${OpenCV_INCLUDE_DIRS})
+target_include_directories(ard_mav_core SYSTEM PRIVATE ${ONNXRUNTIME_INCLUDE_DIR})
+target_link_libraries(ard_mav_core PUBLIC ${OpenCV_LIBS} PRIVATE ${ONNXRUNTIME_LIBRARY})
+
+add_executable(uav_ard_mav src/node.cpp)
+target_link_libraries(uav_ard_mav ard_mav_core Threads::Threads)
+ament_target_dependencies(uav_ard_mav ament_index_cpp rclcpp sensor_msgs std_msgs cv_bridge uav_common_msg)
+
+add_executable(ard_mav_video src/video.cpp)
+target_link_libraries(ard_mav_video ard_mav_core)
+get_filename_component(ONNXRUNTIME_LIBRARY_DIR "${ONNXRUNTIME_LIBRARY}" DIRECTORY)
+set_target_properties(uav_ard_mav ard_mav_video PROPERTIES INSTALL_RPATH "${ONNXRUNTIME_LIBRARY_DIR}")
+
+install(TARGETS uav_ard_mav ard_mav_video DESTINATION lib/${PROJECT_NAME})
+install(DIRECTORY config launch models DESTINATION share/${PROJECT_NAME})
+install(FILES README.md DESTINATION share/${PROJECT_NAME})
+
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(test_tracking test/test_tracking.cpp)
+  target_link_libraries(test_tracking ard_mav_core)
+  target_compile_definitions(test_tracking PRIVATE ARD_MAV_MODELS="${CMAKE_CURRENT_SOURCE_DIR}/models")
+endif()
+ament_package()

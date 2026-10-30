@@ -1,0 +1,30 @@
+{
+  "torch": "2.11.0+cu128",
+  "ultralytics": "8.4.6",
+  "models": {
+    "global_best.onnx": {
+      "source": "global_best.pt",
+      "source_sha256": "10749dc929560184f8ac94fc63ae660cb4cdec8ce3b17da551fad81462e392fe",
+      "onnx_sha256": "4c041bdb8551e096bfb7ab9fb8b510cd497e5fce066f82797c0063e931ec695b"
+    },
+    "local_best.onnx": {
+      "source": "local_best.pt",
+      "source_sha256": "4ace426b951fb69303bf0c5d68e2b3be9385ad841ae97dc3f8bbf847d16afad5",
+      "onnx_sha256": "2c18542818dfe50f5299bf69d8784d670f446d0d96be82f411b59d5580c3e722"
+    },
+    "Net_best.onnx": {
+      "source": "Net_best.pth",
+      "source_sha256": "0d3a4631060339ee72551a89e95887fc49a2d50f9f3473ef354cf3db2830faf5",
+      "onnx_sha256": "4250ba904e1371dc37862f7d39f5891df24b4c3849fe2dcba6e03d6367bfa24a"
+    },
+    "local_multiscale_ft_20261030.onnx": {
+      "source": "/home/ake/SJTU/graduation-project/ultralytics/ARD-MAV/runs/yolo26n_local_multiscale_ft_50e2/weights/best.pt",
+      "source_sha256": "0dae6f407fbd2f71fecd061aa9ee5f6454644924a45c8076283524db80883ad8",
+      "checkpoint_epoch": 17,
+      "checkpoint_date": "2026-10-30T07:45:48.447193",
+      "ultralytics": "8.4.6",
+      "torch": "2.11.0+cu128",
+      "onnx_sha256": "916f4b8450be70051438f6446952de48b8143cb2e25c263e7cee764fe96370d4"
+    }
+  }
+}
