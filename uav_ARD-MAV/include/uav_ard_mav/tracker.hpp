@@ -45,6 +45,7 @@ class OnnxModel {
 class AppearanceDetector {
  public:
   AppearanceDetector(const std::string &path, const Settings &settings);
+  std::vector<Detection> detect_all(const cv::Mat &image, float confidence);
   std::optional<Detection> detect(const cv::Mat &image, float confidence,
                                   std::optional<cv::Point2f> reference = std::nullopt);
 

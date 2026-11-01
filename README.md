@@ -244,6 +244,13 @@ PX4 目录可通过 `PX4_DIR=/path/to/PX4-Autopilot ./start.sh` 指定。
    ros2 launch uav_ard_mav ard_mav.launch.py
    ros2 run uav_vision_dectect uav_vision_dectect
    ```
+   全局／局部 YOLO + 官方 BoT-SORT 的独立替代包见
+   [uav_yolo_track](uav_yolo_track/README.md)：
+   `ros2 launch uav_yolo_track yolo_track.launch.py`。
+   新增单模型全图 + 内置 track 入口：`ros2 launch uav_yolo_track single_model.launch.py`，
+   只加载一个模型，不裁剪局部窗口；模型和置信度在
+   [single_model.yaml](uav_yolo_track/config/single_model.yaml) 中设置。
+   此方案移除应用侧自写卡尔曼和 GLAD 运动级联，保留内置跟踪器内部滤波；与原检测节点二选一。
    使用 [uav_ARD-MAV](uav_ARD-MAV/README.md) 的 ROS 2 / C++ 节点替代原检测节点，
    迁移 ARD-MAV 的全局／局部 YOLO26、运动检测级联和卡尔曼搜索。
    首次运行先执行 `colcon build --packages-up-to uav_ard_mav` 并重新加载 `install/setup.bash`。

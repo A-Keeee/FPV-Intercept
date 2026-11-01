@@ -80,8 +80,7 @@ std::vector<float> OnnxModel::run(const cv::Mat &blob, std::vector<int64_t> &sha
 AppearanceDetector::AppearanceDetector(const std::string &path, const Settings &settings)
     : model_(path, settings), imgsz_(settings.imgsz) {}
 
-std::optional<Detection> AppearanceDetector::detect(const cv::Mat &image, float confidence,
-                                                    std::optional<cv::Point2f> reference) {
+std::vector<Detection> AppearanceDetector::detect_all(const cv::Mat &image, float confidence) {
   // Match Ultralytics PT rect=True: scale up, then minimal stride-32 padding.
   const double ratio = std::min(double(imgsz_) / image.cols, double(imgsz_) / image.rows);
   const int width = int(std::nearbyint(image.cols * ratio));
@@ -100,7 +99,7 @@ std::optional<Detection> AppearanceDetector::detect(const cv::Mat &image, float 
   const double gain = std::min(double(padded.rows) / image.rows, double(padded.cols) / image.cols);
   const double pad_x = std::nearbyint((padded.cols - image.cols * gain) / 2 - 0.1);
   const double pad_y = std::nearbyint((padded.rows - image.rows * gain) / 2 - 0.1);
-  std::optional<Detection> best;
+  std::vector<Detection> detections;
   for (int64_t i = 0; i < std::min<int64_t>(100, shape[1]); ++i) {
     const auto *row = output.data() + i * 6;
     if (!std::all_of(row, row + 6, [](float x) { return std::isfinite(x); }) || row[4] <= confidence ||
@@ -111,7 +110,15 @@ std::optional<Detection> AppearanceDetector::detect(const cv::Mat &image, float 
     const float x2 = std::clamp(float((row[2] - pad_x) / gain), 0.F, float(image.cols));
     const float y2 = std::clamp(float((row[3] - pad_y) / gain), 0.F, float(image.rows));
     if (x2 <= x1 || y2 <= y1) continue;
-    Detection detection{{x1, y1, x2 - x1, y2 - y1}, row[4]};
+    detections.push_back({{x1, y1, x2 - x1, y2 - y1}, row[4]});
+  }
+  return detections;
+}
+
+std::optional<Detection> AppearanceDetector::detect(const cv::Mat &image, float confidence,
+                                                    std::optional<cv::Point2f> reference) {
+  std::optional<Detection> best;
+  for (const auto &detection : detect_all(image, confidence)) {
     if (!best || detection.score > best->score ||
         (reference && detection.score == best->score &&
          cv::norm(detection.center() - *reference) < cv::norm(best->center() - *reference)))

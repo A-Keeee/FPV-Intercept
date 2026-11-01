@@ -1,0 +1,19 @@
+uav_yolo_single_track:
+  ros__parameters:
+    image_topic: /camera/image
+    result_topic: /camera_detect_result
+    # One full-frame model only; relative names resolve in uav_ard_mav/models.
+    model: global_best.onnx #local_multiscale_ft_20261030.onnx #global_best.onnx
+    conf: 0.1
+    imgsz: 640
+    provider: cpu
+    device_id: 0
+    threads: 4
+    tracker_config: config/botsort.yaml
+    # Release the selected ID after this many consecutive misses; no ROI or model switch.
+    target_patience: 30
+    publish_rate: 60.0
+    image_timeout: 0.5
+    backend_timeout_ms: 5000
+    show: true
+    # python_executable: /absolute/path/to/an/environment/with/ultralytics/bin/python

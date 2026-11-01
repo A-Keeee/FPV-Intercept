@@ -21,10 +21,15 @@ find_path(ONNXRUNTIME_INCLUDE_DIR onnxruntime_cxx_api.h
   HINTS "${ONNXRUNTIME_ROOT}/include" PATH_SUFFIXES onnxruntime onnxruntime/core/session REQUIRED)
 find_library(ONNXRUNTIME_LIBRARY onnxruntime HINTS "${ONNXRUNTIME_ROOT}/lib" "${ONNXRUNTIME_ROOT}/lib64" REQUIRED)
 
-add_library(ard_mav_core STATIC src/onnx_models.cpp src/motion.cpp src/tracker.cpp)
-target_include_directories(ard_mav_core PUBLIC include ${OpenCV_INCLUDE_DIRS})
-target_include_directories(ard_mav_core SYSTEM PRIVATE ${ONNXRUNTIME_INCLUDE_DIR})
-target_link_libraries(ard_mav_core PUBLIC ${OpenCV_LIBS} PRIVATE ${ONNXRUNTIME_LIBRARY})
+add_library(ard_mav_inference STATIC src/onnx_models.cpp)
+target_include_directories(ard_mav_inference PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include> ${OpenCV_INCLUDE_DIRS})
+target_include_directories(ard_mav_inference SYSTEM PRIVATE ${ONNXRUNTIME_INCLUDE_DIR})
+target_link_libraries(ard_mav_inference PUBLIC ${OpenCV_LIBS} ${ONNXRUNTIME_LIBRARY})
+
+add_library(ard_mav_core STATIC src/motion.cpp src/tracker.cpp)
+target_link_libraries(ard_mav_core PUBLIC ard_mav_inference)
 
 add_executable(uav_ard_mav src/node.cpp)
 target_link_libraries(uav_ard_mav ard_mav_core Threads::Threads)
@@ -36,6 +41,8 @@ get_filename_component(ONNXRUNTIME_LIBRARY_DIR "${ONNXRUNTIME_LIBRARY}" DIRECTOR
 set_target_properties(uav_ard_mav ard_mav_video PROPERTIES INSTALL_RPATH "${ONNXRUNTIME_LIBRARY_DIR}")
 
 install(TARGETS uav_ard_mav ard_mav_video DESTINATION lib/${PROJECT_NAME})
+install(TARGETS ard_mav_inference EXPORT ard_mav_inference_targets ARCHIVE DESTINATION lib)
+install(DIRECTORY include/ DESTINATION include)
 install(DIRECTORY config launch models DESTINATION share/${PROJECT_NAME})
 install(FILES README.md DESTINATION share/${PROJECT_NAME})
 
@@ -45,4 +52,6 @@ if(BUILD_TESTING)
   target_link_libraries(test_tracking ard_mav_core)
   target_compile_definitions(test_tracking PRIVATE ARD_MAV_MODELS="${CMAKE_CURRENT_SOURCE_DIR}/models")
 endif()
+ament_export_targets(ard_mav_inference_targets)
+ament_export_dependencies(OpenCV)
 ament_package()

@@ -1,0 +1,23 @@
+uav_yolo_track:
+  ros__parameters:
+    image_topic: /camera/image
+    result_topic: /camera_detect_result
+    # Relative model filenames resolve against uav_ard_mav's installed models directory.
+    global_model: global_best.onnx
+    local_model: local_multiscale_ft_20261030.onnx
+    tracker_config: config/botsort.yaml
+    provider: cpu
+    device_id: 0
+    threads: 4
+    imgsz: 640
+    global_conf: 0.3
+    local_conf: 0.1
+    crop_size: 300
+    roi_growth: 4
+    local_patience: 30
+    publish_rate: 60.0
+    image_timeout: 0.5
+    backend_timeout_ms: 5000
+    show: true
+    # python_executable: /absolute/path/to/an/environment/with/ultralytics/bin/python
+    # Default interpreter is selected at build time; no application-side Kalman configuration.

@@ -19,7 +19,7 @@ uav_ard_mav:
     local_conf: 0.1
     crop_size: 300
     roi_growth: 4
-    local_patience: 30
+    local_patience: 5
     kalman:
       # Same implementation choices as tracking/configs/track_glad.yaml, not paper ground truth.
       process_noise: 0.01
