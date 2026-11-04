@@ -13,7 +13,7 @@ YoloDetector::YoloDetector(const DetectorConfig& config)
     opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
 
     try {
-        OrtCUDAProviderOptions cuda_opts;
+        OrtCUDAProviderOptions cuda_opts{};
         cuda_opts.device_id = 0;
         opts.AppendExecutionProvider_CUDA(cuda_opts);
         std::cout << "YoloDetector: CUDA provider enabled" << std::endl;

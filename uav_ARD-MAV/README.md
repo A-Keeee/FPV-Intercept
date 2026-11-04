@@ -19,12 +19,17 @@ colcon build --packages-up-to uav_ard_mav --cmake-args -DCMAKE_BUILD_TYPE=Releas
 source install/setup.bash
 ros2 launch uav_ard_mav ard_mav.launch.py
 
-# CUDA 推理，需要匹配的 ONNX Runtime GPU、CUDA/cuDNN 安装
+# 默认使用 CUDA，需要匹配的 ONNX Runtime GPU、CUDA/cuDNN 安装
 ros2 launch uav_ard_mav ard_mav.launch.py provider:=cuda
+# 需要 CPU 时显式覆盖
+ros2 launch uav_ard_mav ard_mav.launch.py provider:=cpu
 
 # 默认弹出 ARD-MAV 窗口，显示检测框、搜索 ROI 和检测状态。
 # 无桌面环境时关闭窗口，也可通过 /uav_ard_mav/debug_image 查看图像。
 ros2 launch uav_ard_mav ard_mav.launch.py show:=false
+
+# 窗口默认 960×540，支持拖动缩放；也可指定更小的初始尺寸。
+ros2 launch uav_ard_mav ard_mav.launch.py show_width:=800 show_height:=450
 
 # 直接运行时，代码默认值与 params.yaml 一致
 ros2 run uav_ard_mav uav_ard_mav
@@ -43,6 +48,10 @@ ros2 run uav_ard_mav uav_ard_mav
 - 调试 `/uav_ard_mav/debug_image`：`sensor_msgs/msg/Image`，仅有订阅者时生成；白框为搜索 ROI，橙点为漏检预测。
 
 窗口与调试图像在目标框旁显示 `Drone 0.87`，顶部同时显示当前分支与 `conf`；无检测时为 `conf --`。
+`show_width`、`show_height` 仅设置显示窗口的初始尺寸，画面保持比例；
+检测、发布框坐标和调试图像仍使用原图尺寸。
+窗口和调试图像左上角显示实际处理 FPS，每 0.5 秒更新一次，包含检测、显示和等帧的影响，
+与 `publish_rate` 的结果发布频率不同；首个统计窗口完成前显示 `FPS: --`。
 GAD/LAD 的分数来自 YOLO，筛选阈值分别为 `global_conf=0.5`、`local_conf=0.1`；
 GMD/LMD 的分数为外观 CNN 的 MAV 概率，二分类选择 MAV（概率大于 0.5）后才接受候选，
 还需通过运动筛选。两个模型的分数含义不同，显示值不代表经过校准的正确率。
@@ -64,12 +73,17 @@ ros2 launch uav_ard_mav ard_mav.launch.py params_file:=/absolute/path/params.yam
 
 ## 迁移的方法
 
-1. GLOBAL：先全局 YOLO26（GAD，阈值 0.5），失败再全局运动检测（GMD）。
+1. 未锁定目标时，按处理帧交替执行 GLOBAL 与 LOCAL_MULTI，从 GLOBAL 开始。
+   GLOBAL 使用全局 YOLO26（GAD，`global_conf`）；LOCAL_MULTI 使用 `local_model`
+   （默认 `local_multiscale_ft_20261030.onnx`，LAD，`local_conf`）对整帧重识别，
+   用于补充全局模型对近距离大目标的漏检。外观检测失败后均尝试全局运动检测（GMD）。
 2. 检测成功后，下一帧进入 LOCAL。30×20 网格 LK 与 RANSAC 单应变换补偿相机运动；
    状态 `(vx,vy,ax,ay)` 的卡尔曼滤波器叠加相对速度预测。
 3. LOCAL：窗口边长 `300 + 4 * lost_frames`，边界处平移至图内；
    先局部 YOLO26（LAD，阈值 0.1），失败再局部运动检测（LMD）。
-4. 连续局部失败 30 个处理帧后，下一帧切 GLOBAL；没有周期性全图扫描或同帧全局回退。
+4. 连续局部失败达到 `local_patience` 后，下一帧从 GLOBAL 开始逐帧交替 GLOBAL / LOCAL_MULTI
+   搜索；任一分支检测成功后，下一帧恢复 LOCAL，并将下次重搜索的起点重置为 GLOBAL。
+   节点重置或图像尺寸变化也从 GLOBAL 重新开始；每个搜索帧只使用一个外观模型。
 5. 运动分支保留高斯滤波、相机补偿帧差、光照／背景运动阈值修正、形态学、区域合并、
    Shi-Tomasi/LK 速度与方向方差筛选，以及官方 32×32 外观 CNN。
    单应估计失败时拒绝运动候选；局部搜索仍可用相对速度预测。
@@ -129,7 +143,9 @@ ros2 run uav_ard_mav ard_mav_video /path/to/video.mp4 \
 
 离线工具使用源码默认参数，不自动读取 ROS YAML；输出每帧检测、模式、分支、ROI、预测点和运动级联统计。
 不读取标注、不控制飞行器。测试覆盖滤波相机平移、边缘 ROI、单应估计、运动补偿失败拒绝、
-模型真实推理和分辨率变化。
+模型真实推理、全图搜索模型逐帧交替、显式重置和分辨率变化。
+重识别回归测试另用两个微型 ONNX 测试模型，模拟全局模型持续漏检、local-multi 成功识别，
+验证多次丢失／重识别后恢复 ROI 跟踪；测试模型不用于节点推理。
 
 本机迁移验证（2026-10-29）：Release 构建与 5 项自动测试通过；`phantom12`、`phantom08`
 各前 300 帧的模式、检测分支、检测有无和丢失帧数均与原 Python 逐帧一致。

@@ -19,7 +19,7 @@ struct Settings {
   int min_area = 30;
   double merge_distance = 15.0, angle_variance = 0.8, speed_variance = 0.8, min_speed = 1.0;
   int open_iterations = 1, close_iterations = 3;
-  std::string provider = "cpu";
+  std::string provider = "cuda";
   int device_id = 0, threads = 4;
   void validate() const;
 };
@@ -113,6 +113,8 @@ class Tracker {
   std::unique_ptr<RelativeVelocity> state_;
   cv::Mat previous_, previous_gray_;
   int lost_ = 0;
+  // Alternate full-frame search models while no target is being tracked.
+  bool search_local_ = false;
 };
 cv::Mat draw_result(const cv::Mat &frame, const Result &result);
 

@@ -15,12 +15,16 @@ def generate_launch_description():
 
     def start(context):
         overrides = {}
-        for name in ("show", "provider", "python_executable"):
+        for name, value_type in {
+            "show": bool,
+            "show_width": int,
+            "show_height": int,
+            "provider": str,
+            "python_executable": str,
+        }.items():
             if LaunchConfiguration(name).perform(context):
-                overrides[name] = (
-                    ParameterValue(LaunchConfiguration(name), value_type=bool)
-                    if name == "show"
-                    else LaunchConfiguration(name)
+                overrides[name] = ParameterValue(
+                    LaunchConfiguration(name), value_type=value_type
                 )
         return [
             Node(
@@ -38,6 +42,8 @@ def generate_launch_description():
                 "params_file", default_value=str(share / "config/single_model.yaml")
             ),
             DeclareLaunchArgument("show", default_value=""),
+            DeclareLaunchArgument("show_width", default_value=""),
+            DeclareLaunchArgument("show_height", default_value=""),
             DeclareLaunchArgument("provider", default_value=""),
             DeclareLaunchArgument("python_executable", default_value=""),
             OpaqueFunction(function=start),

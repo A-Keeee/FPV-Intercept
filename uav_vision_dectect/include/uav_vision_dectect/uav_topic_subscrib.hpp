@@ -1,5 +1,7 @@
 #pragma once
 
+#include <chrono>
+#include <optional>
 #include <opencv2/core/mat.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/image.hpp>
@@ -41,6 +43,9 @@ class UavTopicSubscrib : public rclcpp::Node
         uav_common_msg::msg::RectMsg pub_uav_result_rect;
 
         cv_bridge::CvImagePtr orig_cv_ptr;
+        std::optional<std::chrono::steady_clock::time_point> fps_window_start_;
+        int fps_window_frames_ = 0;
+        double fps_ = 0.0;
 
 
         /************************LightTrack跟踪部分************************/

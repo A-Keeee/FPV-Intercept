@@ -50,7 +50,9 @@ if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   ament_add_gtest(test_tracking test/test_tracking.cpp)
   target_link_libraries(test_tracking ard_mav_core)
-  target_compile_definitions(test_tracking PRIVATE ARD_MAV_MODELS="${CMAKE_CURRENT_SOURCE_DIR}/models")
+  target_compile_definitions(test_tracking PRIVATE
+    ARD_MAV_MODELS="${CMAKE_CURRENT_SOURCE_DIR}/models"
+    ARD_MAV_TEST_MODELS="${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures")
 endif()
 ament_export_targets(ard_mav_inference_targets)
 ament_export_dependencies(OpenCV)

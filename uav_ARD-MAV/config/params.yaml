@@ -8,18 +8,21 @@ uav_ard_mav:
     # local_model: models/global_best.onnx # Previous configuration: reuse the global detector locally.
     # local_model: models/local_best.onnx
     classifier_model: models/Net_best.onnx
-    provider: cpu # cuda requires the ONNX Runtime CUDA provider and matching CUDA/cuDNN.
+    provider: cuda # cuda requires the ONNX Runtime CUDA provider and matching CUDA/cuDNN.
     device_id: 0
     threads: 4
     publish_rate: 60.0
     image_timeout: 0.5
     show: true
+    # Initial display window size; the image keeps its aspect ratio and can be resized.
+    show_width: 960
+    show_height: 540
     imgsz: 640
     global_conf: 0.3
     local_conf: 0.1
     crop_size: 300
     roi_growth: 4
-    local_patience: 5
+    local_patience: 3
     kalman:
       # Same implementation choices as tracking/configs/track_glad.yaml, not paper ground truth.
       process_noise: 0.01

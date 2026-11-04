@@ -43,7 +43,8 @@ class YoloTrackNode : public rclcpp::Node {
       settings.roi_growth = declare_parameter("roi_growth", 4);
       settings.local_patience = declare_parameter("local_patience", 30);
     }
-    settings.inference.provider = declare_parameter<std::string>("provider", "cpu");
+    settings.inference.provider =
+        declare_parameter<std::string>("provider", settings.inference.provider);
     settings.inference.device_id = declare_parameter("device_id", 0);
     settings.inference.threads = declare_parameter("threads", 4);
     settings.backend_timeout_ms = declare_parameter("backend_timeout_ms", 5000);
@@ -60,8 +61,12 @@ class YoloTrackNode : public rclcpp::Node {
     timeout_ = declare_parameter("image_timeout", 0.5);
     const double rate = declare_parameter("publish_rate", 60.0);
     show_ = declare_parameter("show", true);
+    show_width_ = declare_parameter("show_width", 960);
+    show_height_ = declare_parameter("show_height", 540);
     if (!std::isfinite(timeout_) || timeout_ <= 0 || !std::isfinite(rate) || rate <= 0 || rate > 1000)
       throw std::invalid_argument("Require image_timeout > 0 and 0 < publish_rate <= 1000");
+    if (show_width_ < 1 || show_height_ < 1)
+      throw std::invalid_argument("Require show_width > 0 and show_height > 0");
     if (kSingleModel) {
       const auto path = model("model", "global_best.onnx");
       pipeline_ = std::make_unique<yolo_track::Pipeline>(path, settings);
@@ -137,6 +142,11 @@ class YoloTrackNode : public rclcpp::Node {
   void work() {
     std::optional<rclcpp::Time> previous_stamp;
     Clock::time_point previous_time;
+    const char *window_name = kSingleModel ? "YOLO Single Model Track" : "YOLO Global-Local Track";
+    bool window_initialized = false;
+    std::optional<Clock::time_point> fps_window_start;
+    int fps_window_frames = 0;
+    double fps = 0.0;
     while (true) {
       sensor_msgs::msg::Image::ConstSharedPtr image;
       Clock::time_point received;
@@ -159,6 +169,18 @@ class YoloTrackNode : public rclcpp::Node {
         previous_time = received;
         const auto frame = cv_bridge::toCvShare(image, "bgr8");
         const auto result = pipeline_->process(frame->image);
+        const auto completed = Clock::now();
+        if (!fps_window_start) {
+          fps_window_start = completed;
+        } else {
+          ++fps_window_frames;
+          const double elapsed = std::chrono::duration<double>(completed - *fps_window_start).count();
+          if (elapsed >= 0.5) {
+            fps = fps_window_frames / elapsed;
+            fps_window_frames = 0;
+            fps_window_start = completed;
+          }
+        }
         if (result.target) {
           const auto &target = *result.target;
           rectangle.x = int(std::floor(target.box.x));
@@ -171,11 +193,21 @@ class YoloTrackNode : public rclcpp::Node {
         RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 2000, "%s -> %s | ID %d | conf %.2f | lost %d",
                              result.mode.c_str(), result.next_mode.c_str(), id, confidence, result.lost);
         if (show_ || debug_->get_subscription_count()) {
-          const auto canvas = yolo_track::draw_result(frame->image, result);
+          auto canvas = yolo_track::draw_result(frame->image, result);
+          const auto fps_label = fps > 0 ? cv::format("FPS: %.1f", fps) : std::string("FPS: --");
+          cv::putText(canvas, fps_label, {15, 30}, cv::FONT_HERSHEY_SIMPLEX, 0.8, {0, 0, 0}, 4,
+                      cv::LINE_AA);
+          cv::putText(canvas, fps_label, {15, 30}, cv::FONT_HERSHEY_SIMPLEX, 0.8, {255, 255, 0}, 2,
+                      cv::LINE_AA);
           if (debug_->get_subscription_count())
             debug_->publish(*cv_bridge::CvImage(image->header, "bgr8", canvas).toImageMsg());
           if (show_) {
-            cv::imshow(kSingleModel ? "YOLO Single Model Track" : "YOLO Global-Local Track", canvas);
+            if (!window_initialized) {
+              cv::namedWindow(window_name, cv::WINDOW_NORMAL | cv::WINDOW_KEEPRATIO);
+              cv::resizeWindow(window_name, show_width_, show_height_);
+              window_initialized = true;
+            }
+            cv::imshow(window_name, canvas);
             cv::waitKey(1);
           }
         }
@@ -215,6 +247,7 @@ class YoloTrackNode : public rclcpp::Node {
   Clock::time_point pending_time_, latest_time_;
   RectMsg latest_;
   int latest_id_ = -1;
+  int show_width_ = 960, show_height_ = 540;
   float latest_confidence_ = 0;
   bool stop_ = false, ready_ = false, show_ = true;
   double timeout_ = 0.5;

@@ -113,8 +113,8 @@ cv::Mat draw_result(const cv::Mat &frame, const Result &result) {
   const auto label = result.mode + " | ID " + (result.target ? std::to_string(result.target->id) : "--") +
                      " | conf " + (result.target ? cv::format("%.2f", result.target->confidence) : "--") +
                      " | lost " + std::to_string(result.lost);
-  cv::putText(canvas, label, {15, 30}, cv::FONT_HERSHEY_SIMPLEX, .7, {0, 0, 0}, 4, cv::LINE_AA);
-  cv::putText(canvas, label, {15, 30}, cv::FONT_HERSHEY_SIMPLEX, .7, {0, 255, 255}, 2, cv::LINE_AA);
+  cv::putText(canvas, label, {15, 60}, cv::FONT_HERSHEY_SIMPLEX, .7, {0, 0, 0}, 4, cv::LINE_AA);
+  cv::putText(canvas, label, {15, 60}, cv::FONT_HERSHEY_SIMPLEX, .7, {0, 255, 255}, 2, cv::LINE_AA);
   return canvas;
 }
 

@@ -6,14 +6,17 @@ uav_yolo_single_track:
     model: global_best.onnx #local_multiscale_ft_20261030.onnx #global_best.onnx
     conf: 0.1
     imgsz: 640
-    provider: cpu
+    provider: cuda
     device_id: 0
     threads: 4
     tracker_config: config/botsort.yaml
     # Release the selected ID after this many consecutive misses; no ROI or model switch.
-    target_patience: 30
+    target_patience: 3
     publish_rate: 60.0
     image_timeout: 0.5
     backend_timeout_ms: 5000
     show: true
+    # Initial display window size; the image keeps its aspect ratio and can be resized.
+    show_width: 960
+    show_height: 540
     # python_executable: /absolute/path/to/an/environment/with/ultralytics/bin/python

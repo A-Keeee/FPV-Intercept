@@ -125,8 +125,6 @@ void UavTopicSubscrib::image_callback(const sensor_msgs::msg::Image::SharedPtr m
     std::string status_text = "";
     cv::Scalar color = cv::Scalar(0, 255, 0);
 
-    double t = (double)cv::getTickCount();
-
     // ===========================
     // 3. 核心逻辑分支
     // ===========================
@@ -232,7 +230,7 @@ void UavTopicSubscrib::image_callback(const sensor_msgs::msg::Image::SharedPtr m
         // 绘制 (这里保留你原本的绘制逻辑，因为你有根据状态变色的需求)
         // 也可以混合使用 YoloDetector::draw，但它颜色是固定的
         cv::rectangle(frame, result_rect, color, 2);
-        cv::putText(frame, status_text, cv::Point(20, 40), cv::FONT_HERSHEY_SIMPLEX, 0.8, color, 2);
+        cv::putText(frame, status_text, cv::Point(20, 70), cv::FONT_HERSHEY_SIMPLEX, 0.8, color, 2);
 
     }
     else
@@ -240,16 +238,28 @@ void UavTopicSubscrib::image_callback(const sensor_msgs::msg::Image::SharedPtr m
         uav_result_rect = cv::Rect(-1, -1, -1, -1);
 
         if(!status_text.empty()) {
-             cv::putText(frame, status_text, cv::Point(20, 40), cv::FONT_HERSHEY_SIMPLEX, 0.8, cv::Scalar(0, 0, 255), 2);
+             cv::putText(frame, status_text, cv::Point(20, 70), cv::FONT_HERSHEY_SIMPLEX, 0.8, cv::Scalar(0, 0, 255), 2);
         }
     }
 
     // ===========================
     // 6. 显示与帧率
     // ===========================
-    double fps = cv::getTickFrequency() / ((double)cv::getTickCount() - t);
-    std::string frameLabel = "FPS: " + std::to_string(fps).substr(0, 5);
-    cv::putText(frame, frameLabel, cv::Point(20, 80), cv::FONT_HERSHEY_SIMPLEX, 0.8, cv::Scalar(255, 255, 0), 2);
+    const auto completed = std::chrono::steady_clock::now();
+    if (!fps_window_start_) {
+        fps_window_start_ = completed;
+    } else {
+        ++fps_window_frames_;
+        const double elapsed = std::chrono::duration<double>(completed - *fps_window_start_).count();
+        if (elapsed >= 0.5) {
+            fps_ = fps_window_frames_ / elapsed;
+            fps_window_frames_ = 0;
+            fps_window_start_ = completed;
+        }
+    }
+    const auto frameLabel = fps_ > 0 ? cv::format("FPS: %.1f", fps_) : std::string("FPS: --");
+    cv::putText(frame, frameLabel, cv::Point(20, 35), cv::FONT_HERSHEY_SIMPLEX, 0.8, cv::Scalar(0, 0, 0), 4, cv::LINE_AA);
+    cv::putText(frame, frameLabel, cv::Point(20, 35), cv::FONT_HERSHEY_SIMPLEX, 0.8, cv::Scalar(255, 255, 0), 2, cv::LINE_AA);
 
     cv::namedWindow("Result", cv::WINDOW_NORMAL);
     cv::resizeWindow("Result", 640, 640);

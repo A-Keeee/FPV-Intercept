@@ -23,11 +23,19 @@ ros2 launch uav_yolo_track yolo_track.launch.py
 
 # 无桌面显示；仍可订阅调试图像
 ros2 launch uav_yolo_track single_model.launch.py show:=false
+# 自定义显示窗口大小（两个入口均支持）
+ros2 launch uav_yolo_track single_model.launch.py show_width:=800 show_height:=450
 # CUDA 只改变 C++ ONNX 推理后端
 ros2 launch uav_yolo_track single_model.launch.py provider:=cuda
+# 默认使用 CUDA；需要 CPU 时显式覆盖
+ros2 launch uav_yolo_track single_model.launch.py provider:=cpu
 ```
 
 两种入口默认均弹窗，显示原图、绿色目标框、置信度、内置跟踪器 ID 和漏检帧数。
+窗口默认 `960×540`，保持图像比例，支持拖动边框缩放；`show_width`、`show_height`
+只设置初始显示大小，检测、发布框坐标和调试图像仍使用原图尺寸。
+窗口和调试图像左上角显示实际处理 FPS，每 0.5 秒更新一次，包含检测／关联、显示和等帧的影响，
+与 `publish_rate` 的结果发布频率不同；首个统计窗口完成前显示 `FPS: --`。
 单模型入口显示 `SINGLE`，没有白色 ROI；全局／局部入口保留白色局部 ROI。
 直接运行：`ros2 run uav_yolo_track uav_yolo_single_track`（单模型），
 或 `ros2 run uav_yolo_track uav_yolo_track`（全局／局部）。
@@ -67,6 +75,7 @@ ros2 launch uav_yolo_track yolo_track.launch.py python_executable:=/absolute/pat
 3. 初次从已确认轨迹中选择最高置信度目标，随后锁定该 ID；短暂丢失时继续全图检测。
 4. 连续漏检 `target_patience=30` 帧后释放所选 ID，下一帧允许重新选目标。
    每个漏检帧输出无效框，不发布纯预测框；这个参数不会触发 ROI 或模型切换。
+   等待期间也逐帧尝试恢复原 ID，无需等满 30 帧才重新检测。
 
 该入口只创建一个 ONNX 推理实例，不读取 `global_model`、`local_model` 或局部窗口参数。
 可将 `model` 改为其他兼容的 YOLO ONNX 模型绝对路径；原权重保留。
@@ -80,9 +89,13 @@ ros2 launch uav_yolo_track yolo_track.launch.py python_executable:=/absolute/pat
 4. LOCAL 锁定当前 ID，只发布该 ID 当帧实际匹配到检测的轨迹；短暂丢失不自动换成旁边的其他 ID。
 5. 漏检时以最后有效框为中心扩大窗口：`crop_size + roi_growth * lost`。
    连续失败 `local_patience` 帧后，下一帧回到 GLOBAL，允许重新选目标。
+   等待期间每帧都在扩大的局部窗口中尝试恢复原 ID，未找到时不进行全图搜索。
    不额外叠加应用侧速度预测；官方跟踪器内部仍执行自己的运动估计。
 
 每个处理帧只运行一个 YOLO 模型，跟踪器更新一次（包括空检测）。
+这两个等待参数按实际处理帧数计数，`30` 帧在 30 FPS 下约 1 秒、15 FPS 下约 2 秒；
+不按 `publish_rate` 的结果发布频率计算。释放 ID／切回 GLOBAL 后，实际重新选中目标
+还取决于检测结果和跟踪器确认，不保证恰好在下一帧成功。
 BoT-SORT 的原生预测用于关联，但其未匹配的预测不会作为有效框发布。
 ID 是内置跟踪器产生的真实轨迹 ID；长期丢失／后端重置后不保证 ID 不变。
 

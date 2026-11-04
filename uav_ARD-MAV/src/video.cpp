@@ -8,7 +8,7 @@
 
 int main(int argc, char **argv) {
   if (argc < 3 || argc > 6) {
-    std::cerr << "Usage: ard_mav_video VIDEO MODEL_DIR [MAX_FRAMES=0] [CSV=frames.csv] [PROVIDER=cpu]\n";
+    std::cerr << "Usage: ard_mav_video VIDEO MODEL_DIR [MAX_FRAMES=0] [CSV=frames.csv] [PROVIDER=cuda]\n";
     return 1;
   }
   try {

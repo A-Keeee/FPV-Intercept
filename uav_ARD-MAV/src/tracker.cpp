@@ -59,6 +59,7 @@ void Tracker::reset() {
   previous_.release();
   previous_gray_.release();
   lost_ = 0;
+  search_local_ = false;
 }
 
 Result Tracker::process(const cv::Mat &frame) {
@@ -83,9 +84,12 @@ Result Tracker::process(const cv::Mat &frame) {
     reference = *result.predicted - cv::Point2f(float(result.roi->x), float(result.roi->y));
   }
   const bool local = bool(state_);
-  result.branch = local ? "LAD" : "GAD";
-  result.detection = (local ? local_ : global_)
-                         .detect(image, local ? settings_.local_conf : settings_.global_conf, reference);
+  const bool use_local_model = local || search_local_;
+  if (!local && search_local_) result.mode = "LOCAL_MULTI";
+  result.branch = use_local_model ? "LAD" : "GAD";
+  result.detection = (use_local_model ? local_ : global_)
+                         .detect(image, use_local_model ? settings_.local_conf : settings_.global_conf,
+                                 reference);
   if (!result.detection && !previous_image.empty()) {
     result.branch = local ? "LMD" : "GMD";
     result.detection = motion_.detect(previous_image, image, result.motion, reference);
@@ -101,12 +105,20 @@ Result Tracker::process(const cv::Mat &frame) {
     else
       state_->correct(center, camera_center);
     lost_ = 0;
+    search_local_ = false;
   } else {
     result.branch = "NONE";
-    if (local && ++lost_ >= settings_.local_patience) state_.reset();
+    if (local) {
+      if (++lost_ >= settings_.local_patience) {
+        state_.reset();
+        search_local_ = false;
+      }
+    } else {
+      search_local_ = !search_local_;
+    }
   }
   result.lost = lost_;
-  result.next_mode = state_ ? "LOCAL" : "GLOBAL";
+  result.next_mode = state_ ? "LOCAL" : (search_local_ ? "LOCAL_MULTI" : "GLOBAL");
   previous_ = frame.clone();
   previous_gray_ = gray;
   return result;
@@ -134,7 +146,7 @@ cv::Mat draw_result(const cv::Mat &frame, const Result &result) {
   cv::putText(canvas,
               result.mode + " | " + result.branch + " | conf " + confidence + " | lost " +
                   std::to_string(result.lost),
-              {15, 30}, cv::FONT_HERSHEY_SIMPLEX, 0.7, {0, 255, 255}, 2);
+              {15, 60}, cv::FONT_HERSHEY_SIMPLEX, 0.7, {0, 255, 255}, 2);
   return canvas;
 }
 

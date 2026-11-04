@@ -14,13 +14,16 @@ def generate_launch_description():
 
     def start_node(context):
         overrides = {}
-        for name in ("provider", "show"):
+        for name, value_type in {
+            "provider": str,
+            "show": bool,
+            "show_width": int,
+            "show_height": int,
+        }.items():
             value = LaunchConfiguration(name).perform(context)
             if value:
-                overrides[name] = (
-                    ParameterValue(LaunchConfiguration(name), value_type=bool)
-                    if name == "show"
-                    else value
+                overrides[name] = ParameterValue(
+                    LaunchConfiguration(name), value_type=value_type
                 )
         return [
             Node(
@@ -44,6 +47,12 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "show", default_value="", description="Override YAML display setting"
+            ),
+            DeclareLaunchArgument(
+                "show_width", default_value="", description="Initial display window width"
+            ),
+            DeclareLaunchArgument(
+                "show_height", default_value="", description="Initial display window height"
             ),
             OpaqueFunction(function=start_node),
         ]

@@ -1,6 +1,6 @@
 # Official Ultralytics BoT-SORT backend. Its OWN Kalman is intentionally retained.
 tracker_type: botsort
-track_high_thresh: 0.25
+track_high_thresh: 0.15
 track_low_thresh: 0.05
 new_track_thresh: 0.25
 track_buffer: 30

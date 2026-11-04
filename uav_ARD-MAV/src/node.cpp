@@ -67,8 +67,12 @@ class ArdMavNode : public rclcpp::Node {
     timeout_ = declare_parameter<double>("image_timeout", 0.5);
     const double rate = declare_parameter<double>("publish_rate", 60.0);
     show_ = declare_parameter<bool>("show", true);
+    show_width_ = declare_parameter<int>("show_width", 960);
+    show_height_ = declare_parameter<int>("show_height", 540);
     if (!std::isfinite(timeout_) || timeout_ <= 0 || !std::isfinite(rate) || rate <= 0 || rate > 1000)
       throw std::invalid_argument("image_timeout must be positive; publish_rate must be in (0,1000]");
+    if (show_width_ < 1 || show_height_ < 1)
+      throw std::invalid_argument("Require show_width > 0 and show_height > 0");
     tracker_ = std::make_unique<ard_mav::Tracker>(global, local, classifier, settings);
     const auto image_topic = declare_parameter<std::string>("image_topic", "/camera/image");
     publisher_ = create_publisher<uav_common_msg::msg::RectMsg>(
@@ -125,6 +129,10 @@ class ArdMavNode : public rclcpp::Node {
   void work() {
     SteadyClock::time_point previous_time{};
     std::optional<rclcpp::Time> previous_stamp;
+    bool window_initialized = false;
+    std::optional<SteadyClock::time_point> fps_window_start;
+    int fps_window_frames = 0;
+    double fps = 0.0;
     while (true) {
       sensor_msgs::msg::Image::ConstSharedPtr image;
       SteadyClock::time_point received;
@@ -145,6 +153,18 @@ class ArdMavNode : public rclcpp::Node {
         previous_time = received;
         const auto frame = cv_bridge::toCvShare(image, sensor_msgs::image_encodings::BGR8);
         const auto result = tracker_->process(frame->image);
+        const auto completed = SteadyClock::now();
+        if (!fps_window_start) {
+          fps_window_start = completed;
+        } else {
+          ++fps_window_frames;
+          const double elapsed = std::chrono::duration<double>(completed - *fps_window_start).count();
+          if (elapsed >= 0.5) {
+            fps = fps_window_frames / elapsed;
+            fps_window_frames = 0;
+            fps_window_start = completed;
+          }
+        }
         if (result.detection) {
           const auto &box = result.detection->box;
           // Round outwards so integer publication preserves every observed box pixel.
@@ -161,10 +181,20 @@ class ArdMavNode : public rclcpp::Node {
                              result.lost, result.motion.candidates, result.motion.motion_pass,
                              result.motion.cnn_pass);
         if (show_ || debug_->get_subscription_count() > 0) {
-          const auto canvas = ard_mav::draw_result(frame->image, result);
+          auto canvas = ard_mav::draw_result(frame->image, result);
+          const auto fps_label = fps > 0 ? cv::format("FPS: %.1f", fps) : std::string("FPS: --");
+          cv::putText(canvas, fps_label, {15, 30}, cv::FONT_HERSHEY_SIMPLEX, 0.8, {0, 0, 0}, 4,
+                      cv::LINE_AA);
+          cv::putText(canvas, fps_label, {15, 30}, cv::FONT_HERSHEY_SIMPLEX, 0.8, {255, 255, 0}, 2,
+                      cv::LINE_AA);
           if (debug_->get_subscription_count() > 0)
             debug_->publish(*cv_bridge::CvImage(image->header, "bgr8", canvas).toImageMsg());
           if (show_) {
+            if (!window_initialized) {
+              cv::namedWindow("ARD-MAV", cv::WINDOW_NORMAL | cv::WINDOW_KEEPRATIO);
+              cv::resizeWindow("ARD-MAV", show_width_, show_height_);
+              window_initialized = true;
+            }
             cv::imshow("ARD-MAV", canvas);
             cv::waitKey(1);
           }
@@ -195,6 +225,7 @@ class ArdMavNode : public rclcpp::Node {
   sensor_msgs::msg::Image::ConstSharedPtr pending_;
   SteadyClock::time_point pending_time_, result_time_;
   uav_common_msg::msg::RectMsg result_;
+  int show_width_ = 960, show_height_ = 540;
   bool stop_ = false, has_result_ = false, show_ = true;
   double timeout_ = 0.5;
 };

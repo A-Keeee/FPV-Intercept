@@ -6,7 +6,7 @@ uav_yolo_track:
     global_model: global_best.onnx
     local_model: local_multiscale_ft_20261030.onnx
     tracker_config: config/botsort.yaml
-    provider: cpu
+    provider: cuda
     device_id: 0
     threads: 4
     imgsz: 640
@@ -14,10 +14,13 @@ uav_yolo_track:
     local_conf: 0.1
     crop_size: 300
     roi_growth: 4
-    local_patience: 30
+    local_patience: 3
     publish_rate: 60.0
     image_timeout: 0.5
     backend_timeout_ms: 5000
     show: true
+    # Initial display window size; the image keeps its aspect ratio and can be resized.
+    show_width: 960
+    show_height: 540
     # python_executable: /absolute/path/to/an/environment/with/ultralytics/bin/python
     # Default interpreter is selected at build time; no application-side Kalman configuration.

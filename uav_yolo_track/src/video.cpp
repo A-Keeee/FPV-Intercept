@@ -15,7 +15,7 @@ constexpr bool kSingleModel = false;
 int main(int argc, char **argv) {
   if (argc < 2 || argc > (kSingleModel ? 6 : 5)) {
     std::cerr << "Usage: " << (kSingleModel ? "yolo_single_track_video" : "yolo_track_video")
-              << " VIDEO [MAX_FRAMES=0] [CSV=frames.csv] [PROVIDER=cpu]"
+              << " VIDEO [MAX_FRAMES=0] [CSV=frames.csv] [PROVIDER=cuda]"
               << (kSingleModel ? " [MODEL=global_best.onnx]" : "") << '\n';
     return 1;
   }
