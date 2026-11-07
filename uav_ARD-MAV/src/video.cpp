@@ -26,7 +26,7 @@ int main(int argc, char **argv) {
     if (!csv) throw std::runtime_error("Cannot create CSV");
     csv << "frame,mode,next_mode,branch,detected,x1,y1,x2,y2,score,lost_frames,roi_x,roi_y,roi_side,"
            "predicted_x,predicted_y,homography_ok,motion_called,motion_homography_ok,candidates,motion_pass,"
-           "cnn_pass\n";
+           "cnn_pass,target_fov_ratio,target_roi_fill,roi_width,roi_height\n";
     csv << std::setprecision(9);
     cv::Mat frame;
     int count = 0;
@@ -51,7 +51,13 @@ int main(int argc, char **argv) {
       else
         csv << ',';
       csv << ',' << r.homography_ok << ',' << r.motion.called << ',' << r.motion.homography_ok << ','
-          << r.motion.candidates << ',' << r.motion.motion_pass << ',' << r.motion.cnn_pass << '\n';
+          << r.motion.candidates << ',' << r.motion.motion_pass << ',' << r.motion.cnn_pass << ','
+          << r.target_fov_ratio << ',' << r.target_roi_fill << ',';
+      if (r.roi)
+        csv << r.roi->width << ',' << r.roi->height;
+      else
+        csv << ',';
+      csv << '\n';
     }
     if (count == 0) throw std::runtime_error("No decoded frames");
     std::cout << "Processed " << count << " frames\n";

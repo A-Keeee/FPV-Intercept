@@ -9,16 +9,24 @@
 namespace ard_mav {
 
 void Settings::validate() const {
+  if (local_full_model != "global" && local_full_model != "local" && local_full_model != "local-multi")
+    throw std::invalid_argument("local_full_model must be global, local or local-multi");
   const double values[] = {
       global_conf,      local_conf,           process_noise,     measurement_noise,      initial_covariance,
       ransac_threshold, difference_threshold, light_coefficient, background_coefficient, merge_distance,
-      angle_variance,   speed_variance,       min_speed};
+      angle_variance,   speed_variance,       min_speed, roi_padding,
+      full_frame_enter_ratio, full_frame_exit_ratio, roi_fill_enter_ratio, roi_fill_exit_ratio};
   for (double value : values) {
     if (!std::isfinite(value) || value < 0)
       throw std::invalid_argument("Nonfinite or negative GLAD parameter");
   }
   if (imgsz < 160 || imgsz % 32 || local_conf <= 0 || local_conf > global_conf || global_conf > 1 ||
-      crop_size < 1 || roi_growth < 0 || local_patience < 1 || measurement_noise <= 0 || grid_columns < 1 ||
+      crop_size < 1 || roi_growth < 0 || roi_padding < 1 || local_patience < 1 || global_search_interval < 1 ||
+      full_frame_exit_ratio <= 0 || full_frame_enter_ratio > 1 ||
+      full_frame_exit_ratio >= full_frame_enter_ratio ||
+      roi_fill_exit_ratio <= 0 || roi_fill_enter_ratio > 1 ||
+      roi_fill_exit_ratio >= roi_fill_enter_ratio ||
+      measurement_noise <= 0 || grid_columns < 1 ||
       grid_rows < 1 || min_matches < 4 || ransac_threshold <= 0 || min_area < 1 || open_iterations < 0 ||
       close_iterations < 0 || threads < 1 || device_id < 0 || (provider != "cpu" && provider != "cuda")) {
     throw std::invalid_argument("Invalid GLAD settings (imgsz >= 160 and multiple of 32; provider cpu/cuda)");

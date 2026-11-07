@@ -17,6 +17,8 @@ def generate_launch_description():
         for name, value_type in {
             "provider": str,
             "show": bool,
+            "enable_local_full": bool,
+            "local_full_model": str,
             "show_width": int,
             "show_height": int,
         }.items():
@@ -47,6 +49,12 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "show", default_value="", description="Override YAML display setting"
+            ),
+            DeclareLaunchArgument(
+                "enable_local_full", default_value="", description="Override YAML large-target full-frame mode"
+            ),
+            DeclareLaunchArgument(
+                "local_full_model", default_value="", description="LOCAL_FULL model: global, local or local-multi"
             ),
             DeclareLaunchArgument(
                 "show_width", default_value="", description="Initial display window width"

@@ -24,6 +24,20 @@
 #include <iomanip>
 #include <cmath>
 
+namespace {
+const char *state_name(VpngState state)
+{
+    switch (state) {
+    case VpngState::TAKE_OFF: return "TAKE_OFF";
+    case VpngState::SEARCHING: return "SEARCHING";
+    case VpngState::INTERCEPT: return "INTERCEPT";
+    case VpngState::TRACK_LOST: return "TRACK_LOST";
+    case VpngState::DONE: return "DONE";
+    }
+    return "UNKNOWN";
+}
+}  // namespace
+
 // ============================================================
 //  构造函数
 // ============================================================
@@ -46,10 +60,18 @@ VisionPNG::VisionPNG() : Node("uav_vision_png")
     this->declare_parameter("k1_yaw",             k1_yaw_);
     this->declare_parameter("k2_yaw",             k2_yaw_);
     this->declare_parameter("k_ey",               k_ey_);
+    this->declare_parameter("max_vertical_correction", max_vertical_correction_);
+    this->declare_parameter("max_vertical_speed", setpoint_limits_.vertical_speed);
+    this->declare_parameter("max_accel_xy",       setpoint_limits_.accel_xy);
+    this->declare_parameter("max_accel_z",        setpoint_limits_.accel_z);
+    this->declare_parameter("max_yaw_rate",       setpoint_limits_.yaw_rate);
+    this->declare_parameter("max_yaw_accel",      setpoint_limits_.yaw_accel);
+    this->declare_parameter("detection_timeout", detection_timeout_);
     this->declare_parameter("standby_altitude",   standby_altitude_);
     this->declare_parameter("coast_thresh",       coast_thresh_);
     this->declare_parameter("lost_thresh",        lost_thresh_);
     this->declare_parameter("hit_radius",         (double)hit_radius_);
+    this->declare_parameter("record_csv",         record_csv_);
     this->declare_parameter("csv_path",           csv_path_);
 
     focal_length_      = this->get_parameter("focal_length").as_double();
@@ -63,11 +85,29 @@ VisionPNG::VisionPNG() : Node("uav_vision_png")
     k1_yaw_            = this->get_parameter("k1_yaw").as_double();
     k2_yaw_            = this->get_parameter("k2_yaw").as_double();
     k_ey_              = this->get_parameter("k_ey").as_double();
+    max_vertical_correction_ = this->get_parameter("max_vertical_correction").as_double();
+    setpoint_limits_.speed = speed_cmd_;
+    setpoint_limits_.vertical_speed = this->get_parameter("max_vertical_speed").as_double();
+    setpoint_limits_.accel_xy = this->get_parameter("max_accel_xy").as_double();
+    setpoint_limits_.accel_z = this->get_parameter("max_accel_z").as_double();
+    setpoint_limits_.yaw_rate = this->get_parameter("max_yaw_rate").as_double();
+    setpoint_limits_.yaw_accel = this->get_parameter("max_yaw_accel").as_double();
+    detection_timeout_ = this->get_parameter("detection_timeout").as_double();
     standby_altitude_  = this->get_parameter("standby_altitude").as_double();
     coast_thresh_      = this->get_parameter("coast_thresh").as_int();
     lost_thresh_       = this->get_parameter("lost_thresh").as_int();
     hit_radius_        = (float)this->get_parameter("hit_radius").as_double();
+    record_csv_        = this->get_parameter("record_csv").as_bool();
     csv_path_          = this->get_parameter("csv_path").as_string();
+    setpoint_limits_.validate();
+    if (!std::isfinite(max_vertical_correction_) || max_vertical_correction_ < 0.0 ||
+        !std::isfinite(detection_timeout_) || detection_timeout_ <= 0.0 ||
+        coast_thresh_ < 1 || lost_thresh_ <= coast_thresh_ ||
+        !std::isfinite(hit_radius_) || hit_radius_ <= 0.0f)
+        throw std::invalid_argument("Invalid correction, detection timeout or lost-frame thresholds");
+    RCLCPP_INFO(get_logger(),
+        "Command limits: speed=%.2f m/s, accel_xy/z=%.2f/%.2f m/s^2, yaw_rate=%.2f rad/s",
+        speed_cmd_, setpoint_limits_.accel_xy, setpoint_limits_.accel_z, setpoint_limits_.yaw_rate);
 
     // ---- 相机→机体旋转矩阵（与 los_control.cpp 保持一致）----
     // Cx → By,  Cy → Bz,  Cz → Bx
@@ -94,16 +134,30 @@ VisionPNG::VisionPNG() : Node("uav_vision_png")
     detect_sub_ = create_subscription<RectMsg>(
         "/camera_detect_result", 10,
         [this](const RectMsg::UniquePtr msg) {
+            const bool was_valid = detect_w_ > 0 && detect_h_ > 0;
+            const bool valid = msg->width > 0 && msg->height > 0 && msg->x >= 0 && msg->y >= 0;
+            const int64_t source_stamp = int64_t(msg->header.stamp.sec) * 1000000000LL +
+                                         msg->header.stamp.nanosec;
+            // ARD-MAV republishes a source frame at 60 Hz. Consume each stamped
+            // image once; otherwise changing attitude fabricates new LOS samples.
+            const bool new_result = source_stamp == 0 || source_stamp != last_detect_stamp_ns_ ||
+                                    valid != was_valid;
+            detect_fresh_ = detect_fresh_ || new_result;
+            if (new_result && (state_ == VpngState::INTERCEPT || state_ == VpngState::TRACK_LOST)) {
+                ++stats_.total_detect_frames;
+                if (!valid) ++stats_.lost_frames_total;
+            }
+            last_detect_stamp_ns_ = source_stamp;
             detect_x_ = msg->x;
             detect_y_ = msg->y;
-            detect_w_ = msg->width;
-            detect_h_ = msg->height;
-            detect_fresh_ = true;
+            detect_w_ = valid ? msg->width : -1;
+            detect_h_ = valid ? msg->height : -1;
 
-            if (msg->width == -1) {
+            if (!valid) {
                 lost_frames_++;
             } else {
                 lost_frames_ = 0;
+                if (!was_valid) png_initialized_ = false;
                 // 检测有效：若正在 SEARCHING，切换到拦截
                 if (state_ == VpngState::SEARCHING) {
                     RCLCPP_INFO(get_logger(), "→ 视觉检测到目标，进入 INTERCEPT");
@@ -213,16 +267,33 @@ VisionPNG::VisionPNG() : Node("uav_vision_png")
         std::chrono::milliseconds(25),
         std::bind(&VisionPNG::png_calculate, this));
 
+    // Record outside the 200 Hz control callback. ROS progress logs are further
+    // throttled to 1 Hz; CSV, when requested, is sampled at 10 Hz.
+    timer_stats_ = create_wall_timer(
+        std::chrono::milliseconds(100),
+        std::bind(&VisionPNG::record_statistics, this));
+
     RCLCPP_INFO(get_logger(),
         "VisionPNG 节点已启动 | focal=%.1f img=%dx%d N=%.1f spd=%.1f",
         focal_length_, image_width_, image_height_, N_png_, speed_cmd_);
+    RCLCPP_INFO(get_logger(), "[STATS] recording=ROS_log csv=%s hit_radius_m=%.3f",
+        record_csv_ ? "enabled" : "disabled", (double)hit_radius_);
 }
 
 // ============================================================
-//  析构函数 —— 关闭 CSV 文件
+//  析构函数 —— 无论是否启用 CSV 都输出本次运行摘要
 // ============================================================
 VisionPNG::~VisionPNG()
 {
+    if (statistics_started_) {
+        RCLCPP_INFO(get_logger(),
+            "[STATS] event=summary hit=%s min_distance_m=%.4f hit_time_s=%.4f source_results=%d lost_results=%d",
+            stats_.hit_recorded ? "true" : "false",
+            stats_.min_distance < 1e9 ? stats_.min_distance : -1.0,
+            stats_.intercept_time, stats_.total_detect_frames, stats_.lost_frames_total);
+        if (record_csv_ && state_ == VpngState::DONE && !csv_done_written_)
+            write_stats_to_csv();
+    }
     if (csv_file_.is_open()) {
         // 写入摘要行
         csv_file_ << "\n# ========== 统计摘要 ==========\n";
@@ -247,6 +318,18 @@ void VisionPNG::control_loop()
     control_timestamp_ = std::chrono::duration_cast<std::chrono::milliseconds>(
         now.time_since_epoch()).count();
     time_diff_ = control_timestamp_ - detect_timestamp_;
+    if (state_ == VpngState::INTERCEPT && time_diff_ > detection_timeout_ * 1000.0) {
+        detect_w_ = detect_h_ = -1;
+        detect_fresh_ = false;
+        png_initialized_ = false;
+        state_ = VpngState::TRACK_LOST;
+        RCLCPP_WARN(get_logger(), "Detection stream timed out; braking and searching");
+    }
+
+    // Success evaluation must run during coasting, braking and TRACK_LOST too,
+    // and must never depend on opening or writing a recording file.
+    if (state_ == VpngState::INTERCEPT || state_ == VpngState::TRACK_LOST)
+        update_statistics();
 
     switch (state_) {
     case VpngState::TAKE_OFF:    handle_takeoff();    break;
@@ -267,7 +350,8 @@ void VisionPNG::png_calculate()
 {
     // 只有在拦截阶段且目标有效时才更新
     if (state_ != VpngState::INTERCEPT) return;
-    if (detect_w_ == -1) return;  // 目标丢失，不更新
+    if (detect_w_ <= 0 || detect_h_ <= 0 || !detect_fresh_) return;
+    detect_fresh_ = false;
 
     // ---------- Step 1: 计算像素误差（相对图像中心）----------
     double cx = image_width_  / 2.0;
@@ -292,8 +376,6 @@ void VisionPNG::png_calculate()
     // LOS 向量：相机系 → 机体系 → NED 系
     Eigen::Vector3d Nt_ned = R_b2n * R_c2b_ * Nt;
 
-    // 检测是否与上一帧完全相同（重复帧，跳过更新）
-    if (Nt_ned == last_LOS_vec_) return;
     last_LOS_vec_ = Nt_ned;
     LOS_vec_      = Nt_ned;
 
@@ -314,6 +396,8 @@ void VisionPNG::png_calculate()
         last_v_angle_v_   = LOS_angle_v_;  // 用 LOS 而非实测速度，避免起飞残余污染
         last_v_angle_z_   = LOS_angle_z_;
         png_initialized_  = true;
+        last_ex_ = ex_;
+        d_yaw_ = std::clamp(k1_yaw_ * ex_, -setpoint_limits_.yaw_rate, setpoint_limits_.yaw_rate);
         RCLCPP_INFO(get_logger(),
             "[PNG 初始化] LOS(v=%.3f z=%.3f) |V|=%.2f",
             LOS_angle_v_, LOS_angle_z_, Vt.norm());
@@ -362,8 +446,7 @@ void VisionPNG::png_calculate()
     {
         double d_ex = ex_ - last_ex_;
         d_yaw_   = k1_yaw_ * ex_ + k2_yaw_ * d_ex;
-        // 限制偏航角速率到 ±1.0 rad/s（约 57°/s），避免过激旋转
-        d_yaw_ = std::max(-1.0, std::min(1.0, d_yaw_));
+        d_yaw_ = std::clamp(d_yaw_, -setpoint_limits_.yaw_rate, setpoint_limits_.yaw_rate);
         last_ex_ = ex_;
     }
 
@@ -387,9 +470,6 @@ void VisionPNG::png_calculate()
     data.vel_total     = (float)Vt.norm();
     data_pub_->publish(data);
 
-    // ---------- Step 8: 更新统计计数 ----------
-    stats_.total_detect_frames++;
-    if (detect_w_ == -1) stats_.lost_frames_total++;
 }
 
 // ============================================================
@@ -449,22 +529,32 @@ void VisionPNG::handle_intercept()
     arm();
     set_offboard_mode();
 
-    // ---- 目标丢失分级处理 ----
-    if (lost_frames_ > 0 && lost_frames_ < coast_thresh_) {
+    // ---- 目标丢失分级处理：所有丢失阶段都禁止用旧 LOS 继续加速 ----
+    if (detect_w_ <= 0 || lost_frames_ > 0) {
+        if (lost_frames_ >= lost_thresh_) {
+            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 500,
+                "[INTERCEPT] 目标长时间丢失 lost_frames=%d，切换 TRACK_LOST", lost_frames_);
+            state_ = VpngState::TRACK_LOST;
+            handle_track_lost();
+            return;
+        }
+        publish_offboard_velocity_mode();
+        if (lost_frames_ >= coast_thresh_) {
+            publish_velocity_setpoint(0.0f, 0.0f, 0.0f, coast_yaw_);
+            return;
+        }
         // 短暂丢失（< coast_thresh_ 帧）：惯性续飞，保持上一帧速度+偏航
         // 同时继续旋转机头寻找目标（保持 d_yaw_ 不变）
-        publish_offboard_velocity_mode();
-        publish_velocity_setpoint(coast_vx_, coast_vy_, coast_vz_, (float)d_yaw_);
+        publish_velocity_setpoint(coast_vx_, coast_vy_, coast_vz_, coast_yaw_);
         RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 100,
             "[INTERCEPT/COAST] 惯性续飞 lost=%d v=(%.1f,%.1f,%.1f)",
             lost_frames_, coast_vx_, coast_vy_, coast_vz_);
         return;
     }
 
-    if (lost_frames_ >= lost_thresh_) {
-        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 500,
-            "[INTERCEPT] 目标长时间丢失 lost_frames=%d，切换 TRACK_LOST", lost_frames_);
-        state_ = VpngState::TRACK_LOST;
+    if (!png_initialized_) {
+        publish_offboard_velocity_mode();
+        publish_velocity_setpoint(coast_vx_, coast_vy_, coast_vz_, coast_yaw_);
         return;
     }
 
@@ -472,7 +562,7 @@ void VisionPNG::handle_intercept()
     Eigen::Vector3d Vt(vx_, vy_, vz_);
     double d_v = Vt.norm() + d_gain_;
     d_v = std::min(d_v, speed_cmd_);
-    d_v = std::max(d_v, 2.0);
+    d_v = std::max(d_v, 0.0);
 
     // 从 PNG 角度合成 NED 速度指令
     float vx_cmd = (float)(std::cos(d_v_angle_v_) * std::sin(d_v_angle_z_) * d_v);  // N
@@ -484,28 +574,19 @@ void VisionPNG::handle_intercept()
     //        → UAV 需要上升 → NED vz_cmd 减小（更负）
     //        → vz_ey = k_ey_ * ey_ < 0，叠加后 vz_cmd 变小（上升）✓
     // ey > 0：目标在画面下方 → UAV 需要下降 → vz_ey > 0，vz_cmd 增大（下降）✓
-    // 补偿量限幅至 ±3 m/s
+    // 补偿、垂直速度和总速度分别限幅，避免补偿绕过 speed_cmd。
     {
         float vz_ey = (float)(k_ey_ * ey_);
-        vz_ey = std::max(-3.0f, std::min(3.0f, vz_ey));
+        vz_ey = std::clamp(vz_ey, (float)-max_vertical_correction_, (float)max_vertical_correction_);
         vz_cmd += vz_ey;
     }
-
-    // 缓存速度供惯性续飞使用
-    coast_vx_  = vx_cmd;
-    coast_vy_  = vy_cmd;
-    coast_vz_  = vz_cmd;
-    coast_yaw_ = (float)d_yaw_;
 
     publish_offboard_velocity_mode();
     publish_velocity_setpoint(vx_cmd, vy_cmd, vz_cmd, (float)d_yaw_);
 
-    // ---- 统计：更新最近接距离 + 命中判定 ----
-    save_stats_to_csv();
-
     RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 200,
         "[INTERCEPT] v_cmd=(%.2f,%.2f,%.2f) yaw_r=%.3f |V|=%.2f ex=%.0f ey=%.0f",
-        vx_cmd, vy_cmd, vz_cmd, d_yaw_, Vt.norm(), ex_, ey_);
+        coast_vx_, coast_vy_, coast_vz_, (double)coast_yaw_, Vt.norm(), ex_, ey_);
 }
 
 // ============================================================
@@ -538,16 +619,54 @@ void VisionPNG::handle_done()
 }
 
 // ============================================================
-//  统计记录 —— 写 CSV（仅在 INTERCEPT 阶段调用）
-//  使用 target_pos_stats_ 计算真实距离（导引算法不得调用此变量）
+//  GPS 距离判定 —— 独立于视觉有效性、日志和 CSV 文件状态
+//  仅用于成功判定/统计，不用于导引方向与速度计算
 // ============================================================
-void VisionPNG::save_stats_to_csv()
+void VisionPNG::update_statistics()
+{
+    statistics_started_ = true;
+    stats_.distance = -1.0;
+    if (!lc_stats_init_ || !target_pos_ok_) return;
+
+    const double distance = (target_pos_stats_ - self_pos_stats_).norm();
+    if (!std::isfinite(distance)) return;
+    stats_.distance = distance;
+    stats_.min_distance = std::min(stats_.min_distance, distance);
+    if (distance < hit_radius_ && !stats_.hit_recorded) {
+        stats_.hit_recorded = true;
+        stats_.intercept_time = this->now().seconds();
+        state_ = VpngState::DONE;
+        RCLCPP_WARN(get_logger(),
+            "[STATS] event=hit state=DONE gps_distance_m=%.4f hit_radius_m=%.3f time_s=%.4f 检测到命中",
+            distance, (double)hit_radius_, stats_.intercept_time);
+    }
+}
+
+void VisionPNG::record_statistics()
+{
+    if (!statistics_started_) return;
+    if (state_ != VpngState::DONE) {
+        RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 1000,
+            "[STATS] event=progress state=%s gps_ready=%s gps_distance_m=%.4f min_distance_m=%.4f source_results=%d lost_results=%d",
+            state_name(state_), stats_.distance >= 0.0 ? "true" : "false",
+            stats_.distance, stats_.min_distance < 1e9 ? stats_.min_distance : -1.0,
+            stats_.total_detect_frames, stats_.lost_frames_total);
+    }
+    if (record_csv_ && !csv_done_written_) write_stats_to_csv();
+}
+
+// Optional CSV export is a recording sink only. An unavailable sink is disabled
+// for this run, with one error; it cannot bypass update_statistics().
+void VisionPNG::write_stats_to_csv()
 {
     // 延迟打开文件
     if (!csv_file_.is_open()) {
-        csv_file_.open(csv_path_, std::ios::out);
+        csv_file_.clear();
+        csv_file_.open(csv_path_, std::ios::out | std::ios::trunc);
         if (!csv_file_.is_open()) {
-            RCLCPP_ERROR(get_logger(), "[统计] 无法打开 CSV 文件: %s", csv_path_.c_str());
+            record_csv_ = false;
+            RCLCPP_ERROR(get_logger(), "[STATS] CSV disabled: cannot open %s; success evaluation continues",
+                csv_path_.c_str());
             return;
         }
         csv_file_ << "time_s,"
@@ -562,42 +681,11 @@ void VisionPNG::save_stats_to_csv()
         RCLCPP_INFO(get_logger(), "[统计] CSV 已创建: %s", csv_path_.c_str());
     }
 
-    double ros_time = this->now().seconds();
-
-    // 计算真实距离（统计用，导引不使用）
-    float dist = -1.0f;
-    bool just_hit = false; //标记是否在当前帧命中
-    if (target_pos_ok_) {
-        dist = (target_pos_stats_ - self_pos_stats_).norm();
-
-        // 更新最近接距离
-        if ((double)dist < stats_.min_distance) {
-            stats_.min_distance = (double)dist;
-        }
-
-        // 命中判定（统计层）
-        if (dist < hit_radius_ && !stats_.hit_recorded) {
-            stats_.hit_recorded   = true;
-            stats_.intercept_time = ros_time;
-            just_hit = true; // 标记本帧为命中帧
-            RCLCPP_WARN(get_logger(),
-                "★ [统计] 检测到命中！真实距离=%.3f m (统计专用)", dist);
-            state_ = VpngState::DONE;
-        }
-    }
-
-    // 节流：每 10 帧（约 200ms @ 20Hz png_calculate）写一行，避免文件过大
-    static int csv_counter = 0;
-    csv_counter++;
-    if ((csv_counter % 2 != 0) && !just_hit) {
-            return; 
-        }
-
     csv_file_ << std::fixed << std::setprecision(4)
-              << ros_time << ","
+              << (stats_.hit_recorded ? stats_.intercept_time : this->now().seconds()) << ","
               << self_pos_stats_(0) << "," << self_pos_stats_(1) << "," << -self_pos_stats_(2) << ","
               << target_pos_stats_(0) << "," << target_pos_stats_(1) << "," << -target_pos_stats_(2) << ","
-              << dist << ","
+              << stats_.distance << ","
               << LOS_angle_v_ << "," << LOS_angle_z_ << ","
               << d_v_angle_v_ << "," << d_v_angle_z_ << ","
               << ex_ << "," << ey_ << ","
@@ -605,6 +693,13 @@ void VisionPNG::save_stats_to_csv()
               << detect_w_ << ","
               << static_cast<int>(state_) << "\n";
     csv_file_.flush();
+    if (!csv_file_) {
+        record_csv_ = false;
+        csv_file_.close();
+        RCLCPP_ERROR(get_logger(), "[STATS] CSV disabled: write failed for %s; success evaluation continues",
+            csv_path_.c_str());
+    }
+    if (state_ == VpngState::DONE) csv_done_written_ = true;
 }
 
 // ============================================================
@@ -640,6 +735,7 @@ void VisionPNG::publish_offboard_velocity_mode()
 
 void VisionPNG::publish_position_setpoint(float x, float y, float z)
 {
+    velocity_setpoint_initialized_ = false;
     TrajectorySetpoint msg{};
     msg.position  = {x, y, z};
     msg.yaw       = (float)yaw_;
@@ -649,11 +745,29 @@ void VisionPNG::publish_position_setpoint(float x, float y, float z)
 
 void VisionPNG::publish_velocity_setpoint(float vx, float vy, float vz, float yaw_rate)
 {
+    const auto now = std::chrono::steady_clock::now();
+    double dt = 0.005;
+    if (!velocity_setpoint_initialized_) {
+        setpoint_limiter_.reset(Eigen::Vector3d(vx_, vy_, vz_));
+        velocity_setpoint_initialized_ = true;
+    } else {
+        dt = std::chrono::duration<double>(now - last_setpoint_time_).count();
+    }
+    last_setpoint_time_ = now;
+    setpoint_limiter_.update(Eigen::Vector3d(vx, vy, vz), yaw_rate, dt, setpoint_limits_);
+    const auto &velocity = setpoint_limiter_.velocity();
+    // Cache the published command, so a brief loss holds speed instead of
+    // continuing a ramp toward an unobserved target.
+    coast_vx_ = (float)velocity.x();
+    coast_vy_ = (float)velocity.y();
+    coast_vz_ = (float)velocity.z();
+    coast_yaw_ = (float)setpoint_limiter_.yaw_rate();
     TrajectorySetpoint msg{};
     msg.position  = {std::nanf(""), std::nanf(""), std::nanf("")};
-    msg.velocity  = {vx, vy, vz};
+    msg.velocity  = {coast_vx_, coast_vy_, coast_vz_};
     msg.yaw       = std::nanf("");
-    msg.yawspeed  = yaw_rate;
+    msg.yawspeed  = coast_yaw_;
+    msg.acceleration = {std::nanf(""), std::nanf(""), std::nanf("")};
     msg.timestamp = get_clock()->now().nanoseconds() / 1000;
     traj_pub_->publish(msg);
 }

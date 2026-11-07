@@ -182,11 +182,29 @@ PX4 目录可通过 `PX4_DIR=/path/to/PX4-Autopilot ./start.sh` 指定。
    # 或通过参数选择运动模式和活动范围
    ros2 run uav_target_sim uav_target_sim --ros-args -p motion_mode:=sinusoidal -p max_range:=10.0
 
+   # 只起飞并定点悬停：本地坐标 x=0、y=0，高度5m
+   ros2 run uav_target_sim uav_target_sim --ros-args -p motion_mode:=hover -p takeoff_height:=5.0
+
+   # 定点缓慢自旋：位置不变，偏航角速度0.05rad/s（约2.9°/s）
+   ros2 run uav_target_sim uav_target_sim --ros-args -p motion_mode:=spin -p yaw_rate:=0.05
+
    # 也可使用 launch 文件
    ros2 launch uav_target_sim target_sim.launch.py motion_mode:=random_walk
    ```
 
    **支持的目标运动模式**：
+
+   `hover` 固定位置和朝向；`spin` 固定位置并持续改变偏航角。两者默认在
+   PX4 本地 NED 坐标 `(0, 0, -5)` 悬停。可通过 `hover_x`、`hover_y` 设置水平位置，
+   通过 `takeoff_height` 设置相对本地原点的高度（正值，单位 m，默认5m；适用于所有模式）。
+   若飞机当前不在本地 `(0, 0)`，会先移动到该水平位置。`yaw_rate` 仅用于 `spin`，
+   单位 rad/s，默认0.05；减小绝对值可放慢自旋，负值反向，设为0则不旋转。
+   `spin` 是持续自旋，不限制总偏航角。以上参数在节点启动时读取，修改后需重启节点。
+   launch 文件也支持这些参数，例如：
+
+   ```bash
+   ros2 launch uav_target_sim target_sim.launch.py motion_mode:=spin takeoff_height:=3.0 yaw_rate:=0.02
+   ```
 
    | 参数值 | 运动模式 | 运动学公式 | 特点 |
    | :--- | :--- | :--- | :--- |
@@ -194,7 +212,8 @@ PX4 目录可通过 `PX4_DIR=/path/to/PX4-Autopilot ./start.sh` 指定。
    | `sinusoidal` | 正弦机动 | a=0.5*sin(0.5t) m/s<sup>2</sup> | 前向匀速1m/s + 侧向正弦加速度，周期性规避 |
    | `random_walk` | 随机游走 | v(t+dt) = v(t) + N(0, 0.2) | 速度随机扰动，限速3m/s，无规律逃逸 |
 
-   > `max_range` 参数（默认10m）控制目标活动范围，防止目标飞出拦截机视野。
+   > `max_range` 参数（默认10m）为 `sinusoidal` / `random_walk` 提供边界回复力，
+   > 不是严格的位置裁剪；它不控制 `hover` / `spin`，也不改变 `circle` 的半径。
 
 2. **启动视觉制导拦截**:
    ```bash

@@ -11,9 +11,25 @@
 #include <cmath>
 #include <cstdio>
 #include <chrono>
+#include <iomanip>
+#include <stdexcept>
 
 // PX4 QoS profile
 #include <rmw/qos_profiles.h>
+
+namespace {
+const char *state_name(RLState state)
+{
+    switch (state) {
+    case RLState::TAKE_OFF: return "TAKE_OFF";
+    case RLState::SEARCHING: return "SEARCHING";
+    case RLState::INTERCEPT: return "INTERCEPT";
+    case RLState::TRACK_LOST: return "TRACK_LOST";
+    case RLState::DONE: return "DONE";
+    }
+    return "UNKNOWN";
+}
+}  // namespace
 
 // ============================================================
 //  常量
@@ -346,6 +362,13 @@ RLGuidanceNode::RLGuidanceNode()
     this->declare_parameter("kv", 4.0f);
     this->declare_parameter("kz", 4.0f);
     this->declare_parameter("speed_cmd", 5.0f);
+    this->declare_parameter("max_speed", setpoint_limits_.speed);
+    this->declare_parameter("max_vertical_speed", setpoint_limits_.vertical_speed);
+    this->declare_parameter("max_accel_xy", setpoint_limits_.accel_xy);
+    this->declare_parameter("max_accel_z", setpoint_limits_.accel_z);
+    this->declare_parameter("max_yaw_rate", setpoint_limits_.yaw_rate);
+    this->declare_parameter("max_yaw_accel", setpoint_limits_.yaw_accel);
+    this->declare_parameter("max_vertical_correction", (double)vz_ey_max_);
     this->declare_parameter("d_gain", 1.0f);
     this->declare_parameter("k1_yaw", 0.0005f);
     this->declare_parameter("k2_yaw", 0.0002f);
@@ -353,7 +376,9 @@ RLGuidanceNode::RLGuidanceNode()
     this->declare_parameter("standby_altitude", -6.0f);
     this->declare_parameter("coast_thresh", 30);
     this->declare_parameter("lost_thresh", 90);
+    this->declare_parameter("detection_timeout", detection_timeout_);
     this->declare_parameter("hit_radius", 0.8f);
+    this->declare_parameter("record_csv", record_csv_);
     this->declare_parameter("csv_path",
         "/home/ake/SJTU/graduation-project/FPV-Intercept/rl_intercept_stats.csv");
     this->declare_parameter("bench_test", false);
@@ -373,6 +398,13 @@ RLGuidanceNode::RLGuidanceNode()
     kv_               = static_cast<float>(g_float("kv"));
     kz_               = static_cast<float>(g_float("kz"));
     speed_cmd_        = static_cast<float>(g_float("speed_cmd"));
+    setpoint_limits_.speed = g_float("max_speed");
+    setpoint_limits_.vertical_speed = g_float("max_vertical_speed");
+    setpoint_limits_.accel_xy = g_float("max_accel_xy");
+    setpoint_limits_.accel_z = g_float("max_accel_z");
+    setpoint_limits_.yaw_rate = g_float("max_yaw_rate");
+    setpoint_limits_.yaw_accel = g_float("max_yaw_accel");
+    vz_ey_max_ = static_cast<float>(g_float("max_vertical_correction"));
     d_gain_           = static_cast<float>(g_float("d_gain"));
     k1_yaw_           = static_cast<float>(g_float("k1_yaw"));
     k2_yaw_           = static_cast<float>(g_float("k2_yaw"));
@@ -380,10 +412,19 @@ RLGuidanceNode::RLGuidanceNode()
     standby_altitude_ = static_cast<float>(g_float("standby_altitude"));
     coast_thresh_     = g_int("coast_thresh");
     lost_thresh_      = g_int("lost_thresh");
+    detection_timeout_ = g_float("detection_timeout");
     hit_radius_       = static_cast<float>(g_float("hit_radius"));
+    record_csv_       = g_bool("record_csv");
     csv_path_         = g_str("csv_path");
     dv_angle_max_     = static_cast<float>(g_float("dv_angle_max"));
     std::string model_path = g_str("model_path");
+    setpoint_limits_.validate();
+    if (!std::isfinite(vz_ey_max_) || vz_ey_max_ < 0.0f)
+        throw std::invalid_argument("max_vertical_correction must be finite and nonnegative");
+    if (!std::isfinite(hit_radius_) || hit_radius_ <= 0.0f ||
+        !std::isfinite(detection_timeout_) || detection_timeout_ <= 0.0 ||
+        coast_thresh_ < 1 || lost_thresh_ <= coast_thresh_)
+        throw std::invalid_argument("Invalid hit radius, detection timeout or lost-frame thresholds");
 
     // ---- 加载 ONNX 模型 ----
     if (!fallback_png_) {
@@ -476,6 +517,9 @@ RLGuidanceNode::RLGuidanceNode()
     timer_policy_ = this->create_wall_timer(
         std::chrono::milliseconds(50),  // 20 Hz
         std::bind(&RLGuidanceNode::policy_tick, this));
+    timer_stats_ = this->create_wall_timer(
+        std::chrono::milliseconds(100),
+        std::bind(&RLGuidanceNode::record_statistics, this));
 
     // ---- Bench test 模式 ----
     if (bench_test_) {
@@ -487,16 +531,33 @@ RLGuidanceNode::RLGuidanceNode()
     RCLCPP_INFO(this->get_logger(),
         "RLGuidance 节点已启动 | fallback_png=%d standby=%.1f hit_r=%.1f",
         fallback_png_, standby_altitude_, hit_radius_);
+    RCLCPP_INFO(this->get_logger(), "[STATS] recording=ROS_log csv=%s hit_radius_m=%.3f",
+        record_csv_ ? "enabled" : "disabled", (double)hit_radius_);
+    RCLCPP_INFO(this->get_logger(),
+        "Command limits: speed=%.2f m/s, vertical=%.2f m/s, accel_xy/z=%.2f/%.2f m/s^2, yaw_rate/accel=%.2f/%.2f rad/s(/s)",
+        setpoint_limits_.speed, setpoint_limits_.vertical_speed,
+        setpoint_limits_.accel_xy, setpoint_limits_.accel_z,
+        setpoint_limits_.yaw_rate, setpoint_limits_.yaw_accel);
 }
 
 RLGuidanceNode::~RLGuidanceNode()
 {
+    if (statistics_started_) {
+        RCLCPP_INFO(this->get_logger(),
+            "[STATS] event=summary hit=%s min_distance_m=%.4f hit_time_s=%.4f source_results=%d lost_results=%d watchdog_total=%d cmd_source=%s",
+            hit_recorded_ ? "true" : "false", min_distance_ < 1e9 ? min_distance_ : -1.0,
+            intercept_time_, total_detect_frames_, lost_frames_total_, watchdog_total_, last_cmd_source_.c_str());
+        if (record_csv_ && state_ == RLState::DONE && !csv_done_written_)
+            write_stats_to_csv();
+    }
     // 写入 CSV 摘要
     if (csv_file_.is_open()) {
         csv_file_ << "\n# ========== 统计摘要 ==========\n";
         csv_file_ << "# 总检测帧数," << total_detect_frames_ << "\n";
         csv_file_ << "# 累计丢失帧数," << lost_frames_total_ << "\n";
         csv_file_ << "# 最近接距离(m)," << min_distance_ << "\n";
+        if (hit_recorded_)
+            csv_file_ << "# 命中时刻(s)," << intercept_time_ << "\n";
         csv_file_ << "# watchdog触发次数," << watchdog_total_ << "\n";
         csv_file_.close();
         RCLCPP_INFO(this->get_logger(), "[统计] CSV 已保存至: %s",
@@ -510,6 +571,18 @@ RLGuidanceNode::~RLGuidanceNode()
 
 void RLGuidanceNode::control_loop()
 {
+    if (state_ == RLState::INTERCEPT &&
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - last_detection_time_).count() >
+            detection_timeout_) {
+        detect_ = std::nullopt;
+        state_ = RLState::TRACK_LOST;
+        RCLCPP_WARN(this->get_logger(), "Detection stream timed out; braking and searching");
+    }
+    // Every tracking phase evaluates success, independently of policy execution
+    // and recording. This includes brief loss, braking and TRACK_LOST.
+    if (state_ == RLState::INTERCEPT || state_ == RLState::TRACK_LOST)
+        update_statistics();
+
     switch (state_) {
     case RLState::TAKE_OFF:    handle_takeoff(); break;
     case RLState::SEARCHING:   handle_searching(); break;
@@ -548,7 +621,7 @@ void RLGuidanceNode::handle_searching()
 
 void RLGuidanceNode::handle_intercept_heartbeat()
 {
-    // 50 Hz: 心跳 + 丢失分级; 速度指令由 20 Hz policy_tick 更新 coast 缓存
+    // 50 Hz: 心跳 + 丢失分级 + 限幅；20 Hz policy_tick 只更新目标速度。
     arm();
     set_offboard_mode();
 
@@ -556,19 +629,36 @@ void RLGuidanceNode::handle_intercept_heartbeat()
         RCLCPP_WARN(this->get_logger(),
             "[INTERCEPT] 目标长时间丢失 lost=%d，切换 TRACK_LOST", lost_frames_);
         state_ = RLState::TRACK_LOST;
+        handle_track_lost();
         return;
     }
 
     publish_offboard_velocity_mode();
+    if (!detect_.has_value()) {
+        // Hold the last command actually sent, rather than continuing the ramp
+        // toward a raw policy command while the target is unseen.
+        const Eigen::Vector3d held = velocity_setpoint_initialized_ ? setpoint_limiter_.velocity() :
+            Eigen::Vector3d(vx_, vy_, vz_);
+        const float yaw_rate = (float)setpoint_limiter_.yaw_rate();
+        if (lost_frames_ < coast_thresh_) {
+            publish_velocity_setpoint((float)held.x(), (float)held.y(), (float)held.z(), yaw_rate);
+        } else {
+            publish_velocity_setpoint(0, 0, 0, yaw_rate);
+        }
+        return;
+    }
     publish_velocity_setpoint(coast_vx_, coast_vy_, coast_vz_, coast_yaw_);
 }
 
 void RLGuidanceNode::handle_track_lost()
 {
     // 制动 + 慢旋搜索
-    float yaw_rate = (std::abs(coast_yaw_) > 0.01f) ? coast_yaw_ : search_yaw_rate_;
+    const float last_yaw_rate = (float)setpoint_limiter_.yaw_rate();
+    float yaw_rate = (std::abs(last_yaw_rate) > 0.01f) ? last_yaw_rate : search_yaw_rate_;
     publish_offboard_velocity_mode();
     publish_velocity_setpoint(0, 0, 0, yaw_rate);
+    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+        "[TRACK_LOST] 减速旋转搜索目标... yaw_rate=%.2f", yaw_rate);
     // 检测回调恢复 INTERCEPT
 }
 
@@ -576,6 +666,7 @@ void RLGuidanceNode::handle_done()
 {
     publish_offboard_velocity_mode();
     publish_velocity_setpoint(0, 0, 0, 0);
+    RCLCPP_INFO_ONCE(this->get_logger(), "★★★ 拦截完成，悬停中 ★★★");
 }
 
 // ============================================================
@@ -587,9 +678,7 @@ void RLGuidanceNode::policy_tick()
     if (state_ != RLState::INTERCEPT) return;
 
     auto det = detect_;
-    if (!det.has_value() && lost_frames_ < coast_thresh_) {
-        return;  // 惯性续飞，保持 coast 缓存
-    }
+    if (!det.has_value()) return;  // 续飞与平滑制动由 50 Hz 控制循环处理
 
     if (fallback_png_) {
         // 纯 PNG 模式
@@ -646,7 +735,6 @@ void RLGuidanceNode::policy_tick()
         }
     }
 
-    save_stats_to_csv();
 }
 
 // ============================================================
@@ -655,10 +743,18 @@ void RLGuidanceNode::policy_tick()
 
 void RLGuidanceNode::detect_cb(const RectMsg::SharedPtr msg)
 {
-    if (msg->width == -1) {
+    last_detection_time_ = std::chrono::steady_clock::now();
+    const bool valid = msg->width > 0 && msg->height > 0 && msg->x >= 0 && msg->y >= 0;
+    const int64_t stamp = int64_t(msg->header.stamp.sec) * 1000000000LL + msg->header.stamp.nanosec;
+    const bool new_result = stamp == 0 || stamp != last_detect_stamp_ns_ || valid != detect_.has_value();
+    if (new_result && (state_ == RLState::INTERCEPT || state_ == RLState::TRACK_LOST)) {
+        ++total_detect_frames_;
+        if (!valid) ++lost_frames_total_;
+    }
+    last_detect_stamp_ns_ = stamp;
+    if (!valid) {
         detect_ = std::nullopt;
         lost_frames_++;
-        lost_frames_total_++;
     } else {
         detect_ = std::make_tuple(
             static_cast<int>(msg->x), static_cast<int>(msg->y),
@@ -682,7 +778,6 @@ void RLGuidanceNode::detect_cb(const RectMsg::SharedPtr msg)
             state_ = RLState::INTERCEPT;
         }
     }
-    total_detect_frames_++;
 }
 
 void RLGuidanceNode::odom_cb(const VehicleOdometry::SharedPtr msg)
@@ -786,6 +881,7 @@ void RLGuidanceNode::publish_offboard_velocity_mode()
 
 void RLGuidanceNode::publish_position_setpoint(float x, float y, float z)
 {
+    velocity_setpoint_initialized_ = false;
     TrajectorySetpoint msg{};
     msg.position  = {x, y, z};
     msg.yaw       = yaw_;
@@ -796,11 +892,23 @@ void RLGuidanceNode::publish_position_setpoint(float x, float y, float z)
 void RLGuidanceNode::publish_velocity_setpoint(
     float vx, float vy, float vz, float yaw_rate)
 {
+    const auto now = std::chrono::steady_clock::now();
+    double dt = 0.02;
+    if (!velocity_setpoint_initialized_) {
+        setpoint_limiter_.reset(Eigen::Vector3d(vx_, vy_, vz_));
+        velocity_setpoint_initialized_ = true;
+    } else {
+        dt = std::chrono::duration<double>(now - last_setpoint_time_).count();
+    }
+    last_setpoint_time_ = now;
+    setpoint_limiter_.update(Eigen::Vector3d(vx, vy, vz), yaw_rate, dt, setpoint_limits_);
+    const auto &velocity = setpoint_limiter_.velocity();
     TrajectorySetpoint msg{};
     msg.position  = {std::nanf(""), std::nanf(""), std::nanf("")};
-    msg.velocity  = {vx, vy, vz};
+    msg.velocity  = {(float)velocity.x(), (float)velocity.y(), (float)velocity.z()};
     msg.yaw       = std::nanf("");
-    msg.yawspeed  = yaw_rate;
+    msg.yawspeed  = (float)setpoint_limiter_.yaw_rate();
+    msg.acceleration = {std::nanf(""), std::nanf(""), std::nanf("")};
     msg.timestamp = this->get_clock()->now().nanoseconds() / 1000;
     traj_pub_->publish(msg);
 }
@@ -836,18 +944,51 @@ void RLGuidanceNode::publish_debug_data(float los_v, float los_z,
 }
 
 // ============================================================
-//  CSV 统计
+//  GPS 距离判定与记录（不参与策略输入、动作解码或 PNG 导引计算）
 // ============================================================
 
-void RLGuidanceNode::save_stats_to_csv(bool just_hit)
+void RLGuidanceNode::update_statistics()
 {
-    (void)just_hit;
+    statistics_started_ = true;
+    distance_ = -1.0;
+    if (!target_pos_ok_ || !gps_origin_set_) return;
+    const double distance = (self_pos_stats_ - target_pos_stats_).norm();
+    if (!std::isfinite(distance)) return;
+    distance_ = distance;
+    min_distance_ = std::min(min_distance_, distance);
+    if (distance < hit_radius_ && !hit_recorded_) {
+        hit_recorded_ = true;
+        intercept_time_ = this->now().seconds();
+        state_ = RLState::DONE;
+        RCLCPP_WARN(this->get_logger(),
+            "[STATS] event=hit state=DONE gps_distance_m=%.4f hit_radius_m=%.3f time_s=%.4f cmd_source=%s watchdog_total=%d 检测到命中",
+            distance, (double)hit_radius_, intercept_time_, last_cmd_source_.c_str(), watchdog_total_);
+    }
+}
 
+void RLGuidanceNode::record_statistics()
+{
+    if (!statistics_started_) return;
+    if (state_ != RLState::DONE) {
+        RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+            "[STATS] event=progress state=%s gps_ready=%s gps_distance_m=%.4f min_distance_m=%.4f source_results=%d lost_results=%d cmd_source=%s watchdog_total=%d",
+            state_name(state_), distance_ >= 0.0 ? "true" : "false", distance_,
+            min_distance_ < 1e9 ? min_distance_ : -1.0, total_detect_frames_, lost_frames_total_,
+            last_cmd_source_.c_str(), watchdog_total_);
+    }
+    if (record_csv_ && !csv_done_written_) write_stats_to_csv();
+}
+
+// Optional recording sink only: failures disable CSV without affecting success.
+void RLGuidanceNode::write_stats_to_csv()
+{
     if (!csv_file_.is_open()) {
-        csv_file_.open(csv_path_);
+        csv_file_.clear();
+        csv_file_.open(csv_path_, std::ios::out | std::ios::trunc);
         if (!csv_file_.is_open()) {
-            RCLCPP_ERROR(this->get_logger(), "[统计] 无法打开 CSV: %s",
-                         csv_path_.c_str());
+            record_csv_ = false;
+            RCLCPP_ERROR(this->get_logger(),
+                "[STATS] CSV disabled: cannot open %s; success evaluation continues", csv_path_.c_str());
             return;
         }
         csv_file_ << "time_s,self_x,self_y,self_z,target_x,target_y,target_z,"
@@ -855,27 +996,6 @@ void RLGuidanceNode::save_stats_to_csv(bool just_hit)
                      "ex,ey,vx,vy,vz,detect_w,state\n";
         RCLCPP_INFO(this->get_logger(), "[统计] CSV 已创建: %s", csv_path_.c_str());
     }
-
-    double t = this->get_clock()->now().nanoseconds() * 1e-9;
-
-    // 距离计算（纯统计用）
-    double dist = -1.0;
-    bool just_hit_local = false;
-    if (target_pos_ok_ && gps_origin_set_) {
-        dist = (self_pos_stats_ - target_pos_stats_).norm();
-        if (dist < min_distance_) min_distance_ = dist;
-        if (dist < hit_radius_ && !hit_recorded_) {
-            hit_recorded_ = true;
-            just_hit_local = true;
-            RCLCPP_WARN(this->get_logger(),
-                "★ [统计] 检测到命中！真实距离=%.3f m (统计专用)", dist);
-            state_ = RLState::DONE;
-        }
-    }
-
-    // 节流：每 2 次写一行
-    csv_counter_++;
-    if (csv_counter_ % 2 != 0 && !just_hit_local) return;
 
     float sp_x = self_pos_stats_(0), sp_y = self_pos_stats_(1), sp_z = self_pos_stats_(2);
     float tp_x = target_pos_stats_(0), tp_y = target_pos_stats_(1), tp_z = target_pos_stats_(2);
@@ -887,15 +1007,22 @@ void RLGuidanceNode::save_stats_to_csv(bool just_hit)
     float ey = feat_ey_;
 
     csv_file_ << std::fixed << std::setprecision(4)
-              << t << ","
+              << (hit_recorded_ ? intercept_time_ : this->now().seconds()) << ","
               << sp_x << "," << sp_y << "," << -sp_z << ","
               << tp_x << "," << tp_y << "," << -tp_z << ","
-              << dist << ","
+              << distance_ << ","
               << los_v << "," << los_z << ",0,0,"
               << ex << "," << ey << ","
               << vx_ << "," << vy_ << "," << vz_ << ","
               << det_w << "," << static_cast<int>(state_) << "\n";
     csv_file_.flush();
+    if (!csv_file_) {
+        record_csv_ = false;
+        csv_file_.close();
+        RCLCPP_ERROR(this->get_logger(),
+            "[STATS] CSV disabled: write failed for %s; success evaluation continues", csv_path_.c_str());
+    }
+    if (state_ == RLState::DONE) csv_done_written_ = true;
 }
 
 // ============================================================

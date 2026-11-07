@@ -10,7 +10,7 @@
  *   watchdog 异常 → 回退内置 PNG
  *
  * 统计记录（仅用于数据分析，不参与导引计算）:
- *   订阅 px4_2 GPS → 计算真实距离 → CSV
+ *   订阅 px4_2 GPS → GPS 距离判定/统计 → ROS 日志（默认）、可选 CSV
  *
  * 定时器: 50Hz 主控制循环（心跳+状态机）
  *         20Hz 策略推理（与训练 dt=0.05 一致）
@@ -26,6 +26,8 @@
 #include <array>
 #include <cmath>
 #include <memory>
+#include <chrono>
+#include "uav_rl_guidance/setpoint_limiter.hpp"
 
 // PX4 消息
 #include <px4_msgs/msg/offboard_control_mode.hpp>
@@ -141,9 +143,10 @@ private:
     void publish_vehicle_command(uint16_t command, float p1 = 0.0f, float p2 = 0.0f);
     void publish_debug_data(float los_v, float los_z, float ex, float ey);
 
-    // ---- CSV 统计 ----
-    void open_csv();
-    void save_stats_to_csv(bool just_hit = false);
+    // ---- 独立成功判定与记录（不参与策略观测/动作计算）----
+    void update_statistics();
+    void record_statistics();
+    void write_stats_to_csv();
 
     // ---- 回调 ----
     void detect_cb(const RectMsg::SharedPtr msg);
@@ -159,6 +162,7 @@ private:
     // ---- 定时器 ----
     rclcpp::TimerBase::SharedPtr timer_control_;  // 50 Hz
     rclcpp::TimerBase::SharedPtr timer_policy_;   // 20 Hz
+    rclcpp::TimerBase::SharedPtr timer_stats_;    // 10 Hz 记录，日志节流至 1 Hz
 
     // ---- 发布者 ----
     rclcpp::Publisher<OffboardControlMode>::SharedPtr  offboard_pub_;
@@ -185,6 +189,9 @@ private:
     int lost_frames_  = 0;
     int coast_thresh_ = 30;   // 惯性续飞帧数 (at detect rate)
     int lost_thresh_  = 90;   // 切换到 TRACK_LOST 帧数
+    double detection_timeout_ = 0.5;
+    std::chrono::steady_clock::time_point last_detection_time_;
+    int64_t last_detect_stamp_ns_ = -1;
 
     // ---- 自身状态 ----
     float roll_ = 0, pitch_ = 0, yaw_ = 0;
@@ -231,9 +238,13 @@ private:
     float png_last_ex_ = 0;
     float png_d_yaw_ = 0;
 
-    // ---- 惯性续飞缓存 ----
+    // ---- 20 Hz 策略/PNG 的目标速度；50 Hz 最终发布时统一限幅 ----
     float coast_vx_ = 0, coast_vy_ = 0, coast_vz_ = 0, coast_yaw_ = 0;
     std::string last_cmd_source_ = "png";
+    rl_guidance::SetpointLimits setpoint_limits_;
+    rl_guidance::SetpointLimiter setpoint_limiter_;
+    bool velocity_setpoint_initialized_ = false;
+    std::chrono::steady_clock::time_point last_setpoint_time_;
 
     // ---- 导引/相机参数 ----
     float focal_length_  = 1397.2f;
@@ -248,7 +259,7 @@ private:
     float los_diff_thresh_ = 0.02f;
     float elev_clamp_   = M_PI / 4.0f;
     float search_yaw_rate_ = 0.2f;
-    float vz_ey_max_  = 3.0f;
+    float vz_ey_max_  = 0.8f;
 
     // ---- 相机→机体旋转矩阵 (静态常量) ----
     static const Eigen::Matrix3f R_c2b_;
@@ -270,11 +281,15 @@ private:
     bool target_pos_ok_ = false;
 
     float  hit_radius_    = 0.8f;
+    double distance_      = -1.0;
     double min_distance_  = 1e9;
+    double intercept_time_ = -1.0;
     bool   hit_recorded_  = false;
     int    total_detect_frames_ = 0;
     int    lost_frames_total_   = 0;
-    int    csv_counter_  = 0;
+    bool record_csv_ = false;
+    bool statistics_started_ = false;
+    bool csv_done_written_ = false;
     std::ofstream csv_file_;
     std::string   csv_path_ = "/home/ake/SJTU/graduation-project/FPV-Intercept/rl_intercept_stats.csv";
 

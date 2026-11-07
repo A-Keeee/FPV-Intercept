@@ -4,6 +4,7 @@ Requires onnx only when regenerating; the C++ tests load the committed models.
 The global fixture always misses. The local fixture reports a fixed box with
 confidence equal to the input maximum, so a uniform gray target can be switched
 on/off without motion features or dependence on trained model predictions.
+The scalable fixture uses image brightness to vary box size for ROI switching.
 """
 
 from pathlib import Path
@@ -41,6 +42,29 @@ save(
         constant("axes", [3], [0, 1, 2], TensorProto.INT64),
         helper.make_node("Unsqueeze", ["brightness", "axes"], ["score"]),
         constant("box", [1, 1, 4], [320, 160, 480, 320]),
+        constant("class", [1, 1, 1], [0]),
+        helper.make_node("Concat", ["box", "score", "class"], ["detections"], axis=2),
+    ],
+)
+
+save(
+    "scalable_brightness.onnx",
+    [
+        helper.make_node("ReduceMax", ["image"], ["brightness"], keepdims=0),
+        constant("half_size_scale", [], [300]),
+        helper.make_node("Mul", ["brightness", "half_size_scale"], ["half_size"]),
+        constant("center", [2], [320, 240]),
+        helper.make_node("Sub", ["center", "half_size"], ["low"]),
+        helper.make_node("Add", ["center", "half_size"], ["high"]),
+        helper.make_node("Concat", ["low", "high"], ["coordinates"], axis=0),
+        constant("box_axes", [2], [0, 1], TensorProto.INT64),
+        helper.make_node("Unsqueeze", ["coordinates", "box_axes"], ["box"]),
+        constant("score_scale", [], [5]),
+        helper.make_node("Mul", ["brightness", "score_scale"], ["unclipped_score"]),
+        constant("score_max", [], [0.95]),
+        helper.make_node("Min", ["unclipped_score", "score_max"], ["confidence"]),
+        constant("score_axes", [3], [0, 1, 2], TensorProto.INT64),
+        helper.make_node("Unsqueeze", ["confidence", "score_axes"], ["score"]),
         constant("class", [1, 1, 1], [0]),
         helper.make_node("Concat", ["box", "score", "class"], ["detections"], axis=2),
     ],

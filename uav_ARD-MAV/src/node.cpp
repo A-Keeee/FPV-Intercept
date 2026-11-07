@@ -33,7 +33,16 @@ class ArdMavNode : public rclcpp::Node {
     parameter(settings.local_conf, "local_conf");
     parameter(settings.crop_size, "crop_size");
     parameter(settings.roi_growth, "roi_growth");
+    parameter(settings.roi_padding, "roi_padding");
     parameter(settings.local_patience, "local_patience");
+    parameter(settings.global_search_interval, "global_search_interval");
+    parameter(settings.motion_fallback, "motion_fallback");
+    parameter(settings.enable_local_full, "enable_local_full");
+    parameter(settings.local_full_model, "local_full_model");
+    parameter(settings.full_frame_enter_ratio, "full_frame_enter_ratio");
+    parameter(settings.full_frame_exit_ratio, "full_frame_exit_ratio");
+    parameter(settings.roi_fill_enter_ratio, "roi_fill_enter_ratio");
+    parameter(settings.roi_fill_exit_ratio, "roi_fill_exit_ratio");
     parameter(settings.process_noise, "kalman.process_noise");
     parameter(settings.measurement_noise, "kalman.measurement_noise");
     parameter(settings.initial_covariance, "kalman.initial_covariance");
@@ -64,6 +73,11 @@ class ArdMavNode : public rclcpp::Node {
     const auto global = model_path("global_model", "global_best.onnx");
     const auto local = model_path("local_model", "local_multiscale_ft_20261030.onnx");
     const auto classifier = model_path("classifier_model", "Net_best.onnx");
+    const auto full_global = model_path("local_full_models.global", "global_best.onnx");
+    const auto full_local = model_path("local_full_models.local", "local_best.onnx");
+    const auto full_multi = model_path("local_full_models.local-multi", "local_multiscale_ft_20261030.onnx");
+    const auto &full_model = settings.local_full_model == "global" ? full_global :
+                             (settings.local_full_model == "local" ? full_local : full_multi);
     timeout_ = declare_parameter<double>("image_timeout", 0.5);
     const double rate = declare_parameter<double>("publish_rate", 60.0);
     show_ = declare_parameter<bool>("show", true);
@@ -73,7 +87,7 @@ class ArdMavNode : public rclcpp::Node {
       throw std::invalid_argument("image_timeout must be positive; publish_rate must be in (0,1000]");
     if (show_width_ < 1 || show_height_ < 1)
       throw std::invalid_argument("Require show_width > 0 and show_height > 0");
-    tracker_ = std::make_unique<ard_mav::Tracker>(global, local, classifier, settings);
+    tracker_ = std::make_unique<ard_mav::Tracker>(global, local, classifier, settings, full_model);
     const auto image_topic = declare_parameter<std::string>("image_topic", "/camera/image");
     publisher_ = create_publisher<uav_common_msg::msg::RectMsg>(
         declare_parameter<std::string>("result_topic", "/camera_detect_result"), 10);
@@ -93,6 +107,18 @@ class ArdMavNode : public rclcpp::Node {
     timer_ = create_wall_timer(std::chrono::duration<double>(1.0 / rate), [this]() { publish(); });
     RCLCPP_INFO(get_logger(), "ARD-MAV ready (%s): %s -> %s", settings.provider.c_str(), image_topic.c_str(),
                 publisher_->get_topic_name());
+    RCLCPP_INFO(get_logger(), "Local-first search: patience=%d, global interval=%d, motion fallback=%s",
+                settings.local_patience, settings.global_search_interval,
+                settings.motion_fallback ? "on" : "off");
+    RCLCPP_INFO(get_logger(), "Target-sized ROI: minimum=%d, padding=%.2f, missed-frame growth=%d",
+                settings.crop_size, settings.roi_padding, settings.roi_growth);
+    RCLCPP_INFO(get_logger(), "Large-target LOCAL_FULL=%s: FOV enter/exit=%.2f/%.2f, ROI fill=%.2f/%.2f",
+                settings.enable_local_full ? "on" : "off",
+                settings.full_frame_enter_ratio, settings.full_frame_exit_ratio,
+                settings.roi_fill_enter_ratio, settings.roi_fill_exit_ratio);
+    RCLCPP_INFO(get_logger(), "LOCAL_FULL model=%s, confidence=%.3f: %s", settings.local_full_model.c_str(),
+                settings.local_full_model == "global" ? settings.global_conf : settings.local_conf,
+                full_model.c_str());
     worker_ = std::thread([this]() { work(); });
   }
 
@@ -176,9 +202,10 @@ class ArdMavNode : public rclcpp::Node {
         if (result.mode == "LOCAL" && !result.homography_ok)
           RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
                                "ROI homography failed; velocity prediction only");
-        RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 2000, "%s/%s -> %s, lost=%d, motion=%d/%d/%d",
+        RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 2000, "%s/%s -> %s, lost=%d, fov=%.3f, roi_fill=%.3f, motion=%d/%d/%d",
                              result.mode.c_str(), result.branch.c_str(), result.next_mode.c_str(),
-                             result.lost, result.motion.candidates, result.motion.motion_pass,
+                             result.lost, result.target_fov_ratio, result.target_roi_fill,
+                             result.motion.candidates, result.motion.motion_pass,
                              result.motion.cnn_pass);
         if (show_ || debug_->get_subscription_count() > 0) {
           auto canvas = ard_mav::draw_result(frame->image, result);

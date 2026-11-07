@@ -15,37 +15,51 @@ uav_vision_png:
     kz:    4.0
 
     # 期望冲击速度上限 (m/s)
-    speed_cmd: 5.0
+    speed_cmd: 3.0
 
     # 速度增量增益，减小可避免急剧加速导致大幅俯仰
     d_gain: 1.0
+
+    # ---- 所有速度控制阶段共用的指令限制 ----
+    # 限制速度指令变化率；实际加速度/倾角仍由 PX4 速度与姿态控制器决定。
+    max_accel_xy: 1.5       # 水平速度矢量变化率上限 (m/s²)
+    max_accel_z: 0.6        # 垂直速度变化率上限 (m/s²)
+    max_vertical_speed: 1.0 # NED vz 上限绝对值 (m/s)
+    max_yaw_rate: 0.5       # 偏航角速度上限 (rad/s)
+    max_yaw_accel: 0.5      # 偏航角速度变化率上限 (rad/s²)
 
     # ---- FOV 保持器（主动偏航跟踪）----
     # 将像素误差 ex 转化为偏航角速率 [rad/s]
     # 图像宽 1920px，最大误差 960px，期望最大偏航率 0.8 rad/s
     # k1_yaw — P 比例项 k2_yaw — D 微分项
     # k1_yaw = 0.8 / 960 ≈ 0.0008
-    k1_yaw: 0.0005
-    k2_yaw: 0.0002
+    k1_yaw: 0.0050 # 左右回中响应
+    k2_yaw: 0.0002 # 左右回中阻尼，避免过冲
 
     # ---- 垂直视场补偿（抵消前飞低头导致相机下倾）----
     # ey<0 表示目标在画面上方，补偿 vz_cmd += k_ey * ey（使无人机上升）
-    # 图像高 1080px，最大误差 540px，期望最大补偿 3 m/s（触碰限幅上限）
-    # k_ey = 0.012，ey=-300px → 补偿 -3.6m/s（限幅后 -3m/s），强力防止目标跑出画面上方
-    k_ey: 0.012
+    # 仍保留像素增益，但补偿量限至 ±0.8 m/s，叠加后再限制垂直和总速度。
+    k_ey: 0.0
+    max_vertical_correction: 0.8
 
     # ---- 起飞参数 ----
     # NED z（负值 = 上升），目标待机高度 5m
     standby_altitude: -6.0
 
     # ---- 目标丢失阈值 ----
-    # 惯性续飞阈值：丢失帧数低于此值时保持上一帧速度继续飞行（约 0.5s@30Hz检测）
+    # 按检测消息计数（ARD-MAV 发布 60Hz），不是推理处理帧数。
+    # 丢失前 30 条消息（约 0.5s）保持实际已发布速度，之后平滑减速。
     coast_thresh: 30
-    # 悬停阈值：丢失帧数超过此值才真正切换 TRACK_LOST 悬停
+    # 丢失 90 条消息（约 1.5s）进入 TRACK_LOST 旋转搜索。
     lost_thresh: 90
+    # 检测话题完全断流也触发减速搜索，不沿用旧目标继续加速。
+    detection_timeout: 0.5
 
-    # ---- 统计参数 ----
+    # ---- 成功判定与记录 ----
     # 命中判定半径 (m)
     hit_radius: 0.8
-    # CSV 输出路径
+    # 默认使用 ROS 日志（每次运行独立文件），CSV 为可选的 10 Hz 导出。
+    # CSV 打开/写入失败不影响命中判定；INTERCEPT 与 TRACK_LOST 均持续检查距离。
+    record_csv: false
+    # 仅 record_csv=true 时使用；不会读取旧 CSV 作为判定输入。
     csv_path: "/home/ake/SJTU/graduation-project/FPV-Intercept/vpng_intercept_stats.csv"

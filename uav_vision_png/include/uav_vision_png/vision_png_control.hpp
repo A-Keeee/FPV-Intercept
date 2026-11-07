@@ -17,7 +17,7 @@
  * │  统计记录（仅用于数据分析，不参与导引计算）                             │
  * │    输入：/px4_2/fmu/out/vehicle_gps_position (目标真实GPS，统计专用)  │
  * │          /px4_1/fmu/out/vehicle_gps_position (自身GPS，统计专用)      │
- * │    输出：intercept_stats.csv（记录拦截全程数据）                       │
+ * │    输出：ROS 日志（默认）；可选 CSV                                  │
  * └─────────────────────────────────────────────────────────────────────┘
  *
  * 算法原理：
@@ -44,6 +44,7 @@
 #include <string>
 #include <array>
 #include <chrono>
+#include "uav_vision_png/setpoint_limiter.hpp"
 
 // PX4 消息
 #include <px4_msgs/msg/offboard_control_mode.hpp>
@@ -125,15 +126,18 @@ private:
     void publish_vehicle_command(uint16_t command, float p1 = 0.0f, float p2 = 0.0f);
 
     // ----------------------------------------------------------
-    //  统计 / CSV 记录（不参与导引）
+    //  距离判定与记录（不参与导引方向/速度计算）
     // ----------------------------------------------------------
-    void save_stats_to_csv();
+    void update_statistics();
+    void record_statistics();
+    void write_stats_to_csv();
 
     // ----------------------------------------------------------
     //  定时器
     // ----------------------------------------------------------
     rclcpp::TimerBase::SharedPtr timer_control_;   ///< 200 Hz
     rclcpp::TimerBase::SharedPtr timer_png_;       ///< 20  Hz
+    rclcpp::TimerBase::SharedPtr timer_stats_;     ///< 10 Hz 记录；距离判定仍在控制循环运行
 
     // ----------------------------------------------------------
     //  发布者
@@ -178,6 +182,8 @@ private:
     int detect_w_      = -1;  ///< bbox 宽度；-1 = 目标丢失
     int detect_h_      = 0;   ///< bbox 高度
     bool detect_fresh_ = false;  ///< 是否有新检测帧
+    int64_t last_detect_stamp_ns_ = -1;  ///< 源图像时间戳，过滤检测节点的重复发布
+    double detection_timeout_ = 0.5;    ///< 检测话题断流超时（秒）
 
     // 连续丢失帧计数与阈值
     int lost_frames_   = 0;
@@ -218,7 +224,7 @@ private:
 
     // PNG 参数
     double N_png_    = 4.0;   ///< 比例导引系数（导航增益）
-    double speed_cmd_ = 5.0; ///< 期望冲击速度（m/s）
+    double speed_cmd_ = 3.0; ///< 总速度指令上限（m/s）
     double d_gain_   = 2.0;   ///< 速度增量增益（与 los_control 一致）
     double kv_       = 4.0;   ///< 俯仰 PNG 增益（与 los_control kv 对应）
     double kz_       = 4.0;   ///< 方位 PNG 增益（与 los_control kz 对应）
@@ -237,6 +243,12 @@ private:
     // 图像高 1080px，最大误差 540px，期望最大补偿 3 m/s
     // k_ey = 3.0 / 540 ≈ 0.0056 m/s per pixel
     double k_ey_    = 0.0056;   ///< ey→vz 垂直补偿增益（m/s per pixel）
+    double max_vertical_correction_ = 0.8;  ///< 垂直视场补偿上限（m/s）
+
+    vpng::SetpointLimits setpoint_limits_;
+    vpng::SetpointLimiter setpoint_limiter_;
+    bool velocity_setpoint_initialized_ = false;
+    std::chrono::steady_clock::time_point last_setpoint_time_;
 
     // 惯性续飞缓存（目标丢失时保持上一帧速度指令继续飞行）
     float coast_vx_ = 0.0f;  ///< 惯性续飞 vx 缓存
@@ -273,12 +285,16 @@ private:
     // 命中判定半径（统计用）
     float hit_radius_ = 0.8f;
 
-    // CSV 文件
+    // 默认使用 ROS 日志；CSV 仅作可选导出，失败不影响命中判定。
+    bool record_csv_ = false;
+    bool statistics_started_ = false;
+    bool csv_done_written_ = false;
     std::ofstream csv_file_;
     std::string   csv_path_ = "/home/ake/SJTU/graduation-project/FPV-Intercept/vpng_intercept_stats.csv";
 
     // 拦截统计摘要
     struct InterceptStats {
+        double distance             = -1.0; ///< 最新 GPS 换算距离；-1 表示未就绪
         int    total_detect_frames  = 0;  ///< 总检测帧数
         int    lost_frames_total    = 0;  ///< 累计丢失帧数
         double min_distance         = 1e9;///< 最近接距离（m）

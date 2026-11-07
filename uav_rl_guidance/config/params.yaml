@@ -2,7 +2,7 @@ uav_rl_guidance:
   ros__parameters:
     # ---- 策略模型 (ONNX Runtime) ----
     model_path: "/home/ake/SJTU/graduation-project/FPV-Intercept/uav_rl_guidance/models/policy.onnx"
-    # true: 不加载策略，全程使用内置 PNG（A/B 基线模式，与 uav_vision_png 等价）
+    # true: 不加载策略，全程使用内置 PNG（A/B 基线模式）
     fallback_png: false
 
     # ---- 相机内参（与 uav_vision_png 一致）----
@@ -10,14 +10,25 @@ uav_rl_guidance:
     image_width:  1920
     image_height: 1080
 
-    # ---- PNG 回退参数（与 uav_vision_png/config/params.yaml 一致）----
+    # ---- 策略动作解码与 PNG 回退参数 ----
     kv:    4.0
     kz:    4.0
     speed_cmd: 5.0
     d_gain: 1.0
-    k1_yaw: 0.0005
+    k1_yaw: 0.0050
     k2_yaw: 0.0002
     k_ey: 0.012
+
+    # ---- RL / PNG / watchdog / 丢失制动共用的最终指令限制 ----
+    # speed_cmd=5.0 保留策略原始动作解码范围，实际发布速度受 max_speed 限制。
+    max_speed: 5.0               # 三维速度指令上限 (m/s)
+    max_accel_xy: 1.5            # 水平速度矢量变化率上限 (m/s²)
+    max_accel_z: 1.0             # 垂直速度变化率上限 (m/s²)
+    max_vertical_speed: 2.0      # 垂直速度绝对值上限 (m/s)
+    max_yaw_rate: 5.0            # 偏航角速度上限 (rad/s)
+    max_yaw_accel: 5.0           # 偏航角速度变化率上限 (rad/s²)
+    max_vertical_correction: 0.8 # PNG 回退垂直视场补偿上限 (m/s)
+    # 上述参数限制发送给 PX4 的指令，实际机体加速度和倾角由 PX4 内环决定。
 
     # ---- 起飞参数 ----
     standby_altitude: -6.0
@@ -25,7 +36,13 @@ uav_rl_guidance:
     # ---- 目标丢失阈值（按 60Hz 检测帧计数，与 C++ 口径一致）----
     coast_thresh: 30
     lost_thresh: 90
+    # 检测话题断流超过此秒数进入 TRACK_LOST，仍持续检查 GPS 距离成功条件。
+    detection_timeout: 0.5
 
-    # ---- 统计参数 ----
+    # ---- 成功判定与记录（与视觉 PNG 一致）----
     hit_radius: 0.8
+    # 默认使用每次运行独立的 ROS 日志；CSV 仅为可选 10 Hz 导出。
+    # 文件打开/写入失败不会跳过成功判定。
+    record_csv: false
+    # 仅 record_csv=true 时使用，不读取旧 CSV 作为判定输入。
     csv_path: "/home/ake/SJTU/graduation-project/FPV-Intercept/rl_intercept_stats.csv"

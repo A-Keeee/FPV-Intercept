@@ -29,6 +29,8 @@ using namespace px4_msgs::msg;
 using namespace GeographicLib;
 
 enum class MotionMode {
+    HOVER,          // 定点悬停
+    SPIN,           // 定点偏航自旋
     CIRCLE,         // 匀速圆周运动
     SINUSOIDAL,     // 正弦机动 (周期性规避)
     RANDOM_WALK,    // 随机游走 (无规律逃逸)
@@ -68,6 +70,8 @@ private:
     float pos_z_ = -5.0f;
     float vel_x_ = 0.0f;
     float vel_y_ = 0.0f;
+    float yaw_ = 0.0f;
+    float yaw_rate_ = 0.05f;       // 自旋角速度 (rad/s)
     float sim_time_ = 0.0f;
     static constexpr float dt_ = 0.1f;
 
@@ -91,8 +95,10 @@ private:
     uint64_t offboard_setpoint_counter_;
 
     void publish_offboard_control_mode();
-    void publish_trajectory_setpoint(float x, float y, float z);
+    void publish_trajectory_setpoint(float x, float y, float z,
+                                     float yaw = 0.0f, float yaw_rate = 0.0f);
     void execute_motion();
+    void spin_in_place();
     void move_in_circle();
     void move_sinusoidal();
     void move_random_walk();

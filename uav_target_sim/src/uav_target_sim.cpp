@@ -14,6 +14,7 @@
 #include <iostream>
 #include <algorithm>
 #include <random>
+#include <stdexcept>
 #include <px4_msgs/msg/sensor_gps.hpp>
 
 using namespace std::chrono;
@@ -26,17 +27,35 @@ UavTargetControl::UavTargetControl() : Node("uav_target_sim")
     // --- 参数声明与解析 ---
     this->declare_parameter<std::string>("motion_mode", "circle");
     this->declare_parameter<double>("max_range", 10.0);
+    this->declare_parameter<double>("takeoff_height", 5.0);
+    this->declare_parameter<double>("hover_x", 0.0);
+    this->declare_parameter<double>("hover_y", 0.0);
+    this->declare_parameter<double>("yaw_rate", 0.05);
 
     std::string mode_str = this->get_parameter("motion_mode").as_string();
     max_range_ = static_cast<float>(this->get_parameter("max_range").as_double());
 
-    if (mode_str == "circle")           motion_mode_ = MotionMode::CIRCLE;
+    if (mode_str == "hover")            motion_mode_ = MotionMode::HOVER;
+    else if (mode_str == "spin")        motion_mode_ = MotionMode::SPIN;
+    else if (mode_str == "circle")     motion_mode_ = MotionMode::CIRCLE;
     else if (mode_str == "sinusoidal")  motion_mode_ = MotionMode::SINUSOIDAL;
     else if (mode_str == "random_walk") motion_mode_ = MotionMode::RANDOM_WALK;
     else {
         RCLCPP_WARN(this->get_logger(),
             "Unknown motion_mode '%s', defaulting to 'circle'", mode_str.c_str());
         motion_mode_ = MotionMode::CIRCLE;
+        mode_str = "circle";
+    }
+
+    const float takeoff_height = static_cast<float>(
+        this->get_parameter("takeoff_height").as_double());
+    const float hover_x = static_cast<float>(this->get_parameter("hover_x").as_double());
+    const float hover_y = static_cast<float>(this->get_parameter("hover_y").as_double());
+    yaw_rate_ = static_cast<float>(this->get_parameter("yaw_rate").as_double());
+    if (!std::isfinite(takeoff_height) || takeoff_height <= 0.0f ||
+        !std::isfinite(hover_x) || !std::isfinite(hover_y) || !std::isfinite(yaw_rate_)) {
+        throw std::invalid_argument(
+            "takeoff_height must be positive and finite; hover_x, hover_y and yaw_rate must be finite");
     }
 
     RCLCPP_INFO(this->get_logger(), "=== Motion mode: %s | max_range: %.1fm ===",
@@ -69,10 +88,15 @@ UavTargetControl::UavTargetControl() : Node("uav_target_sim")
 
     pos_x_ = 5.0f;
     pos_y_ = 0.0f;
-    pos_z_ = -5.0f;
+    pos_z_ = -takeoff_height;  // PX4 NED 坐标：向上为负
     vel_x_ = 0.0f;
     vel_y_ = 0.0f;
     sim_time_ = 0.0f;
+
+    if (motion_mode_ == MotionMode::HOVER || motion_mode_ == MotionMode::SPIN) {
+        pos_x_ = hover_x;
+        pos_y_ = hover_y;
+    }
 
     if (motion_mode_ == MotionMode::SINUSOIDAL) {
         vel_x_ = base_speed_;
@@ -83,7 +107,7 @@ UavTargetControl::UavTargetControl() : Node("uav_target_sim")
         publish_offboard_control_mode();
 
         if (offboard_setpoint_counter_ < 15) {
-            publish_trajectory_setpoint(5.0, 0.0, -5.0);
+            publish_trajectory_setpoint(pos_x_, pos_y_, pos_z_);
             offboard_setpoint_counter_++;
         }
         else if (offboard_setpoint_counter_ == 15) {
@@ -114,10 +138,12 @@ void UavTargetControl::publish_offboard_control_mode() {
     offboard_control_mode_publisher_->publish(msg);
 }
 
-void UavTargetControl::publish_trajectory_setpoint(float x, float y, float z) {
+void UavTargetControl::publish_trajectory_setpoint(float x, float y, float z,
+                                                 float yaw, float yaw_rate) {
     TrajectorySetpoint msg{};
     msg.position = {x, y, z};
-    msg.yaw = 0.0;
+    msg.yaw = yaw;
+    msg.yawspeed = yaw_rate;
     msg.timestamp = this->get_clock()->now().nanoseconds() / 1000;
     trajectory_setpoint_publisher_->publish(msg);
 }
@@ -147,10 +173,20 @@ void UavTargetControl::apply_boundary() {
 // ============================================================
 void UavTargetControl::execute_motion() {
     switch (motion_mode_) {
+        case MotionMode::HOVER:
+            publish_trajectory_setpoint(pos_x_, pos_y_, pos_z_);
+            break;
+        case MotionMode::SPIN:         spin_in_place();    break;
         case MotionMode::CIRCLE:       move_in_circle();    break;
         case MotionMode::SINUSOIDAL:   move_sinusoidal();   break;
         case MotionMode::RANDOM_WALK:  move_random_walk();  break;
     }
+}
+
+// 固定位置，仅改变偏航角；yaw_rate 的正负控制自旋方向。
+void UavTargetControl::spin_in_place() {
+    yaw_ = std::remainder(yaw_ + yaw_rate_ * dt_, 2.0f * static_cast<float>(M_PI));
+    publish_trajectory_setpoint(pos_x_, pos_y_, pos_z_, yaw_, yaw_rate_);
 }
 
 // ============================================================
@@ -164,7 +200,7 @@ void UavTargetControl::move_in_circle() {
     float y = radius_ * std::sin(theta_);
 
     TrajectorySetpoint msg{};
-    msg.position = {x, y, -5.0};
+    msg.position = {x, y, pos_z_};
     msg.yaw = theta_;
     msg.timestamp = this->get_clock()->now().nanoseconds() / 1000;
     trajectory_setpoint_publisher_->publish(msg);

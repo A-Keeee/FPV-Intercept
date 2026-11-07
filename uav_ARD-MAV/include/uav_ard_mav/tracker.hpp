@@ -12,6 +12,15 @@ struct Settings {
   int imgsz = 640;
   float global_conf = 0.5F, local_conf = 0.1F;
   int crop_size = 300, roi_growth = 4, local_patience = 30;
+  double roi_padding = 1.20;
+  // Prefer the local model on the full frame; periodically probe the global model.
+  int global_search_interval = 10;
+  bool motion_fallback = false;
+  // Hysteresis and model choice for large-target inference on the whole frame.
+  bool enable_local_full = true;
+  std::string local_full_model = "local-multi";
+  double full_frame_enter_ratio = 0.20, full_frame_exit_ratio = 0.15;
+  double roi_fill_enter_ratio = 0.80, roi_fill_exit_ratio = 0.60;
   double process_noise = 0.01, measurement_noise = 1.0, initial_covariance = 1.0;
   int grid_columns = 30, grid_rows = 20, min_matches = 9;
   double ransac_threshold = 3.0, difference_threshold = 5.0;
@@ -60,7 +69,8 @@ struct Homography {
 };
 Homography estimate_homography(const cv::Mat &previous, const cv::Mat &current, const Settings &settings);
 std::vector<cv::Rect> merge_regions(std::vector<cv::Rect> boxes, double distance);
-cv::Rect search_region(cv::Point2f center, int lost, cv::Size size, const Settings &settings);
+cv::Rect search_region(cv::Point2f center, int lost, cv::Size size, const Settings &settings,
+                       cv::Size2f target_size = {});
 
 class RelativeVelocity {
  public:
@@ -93,6 +103,7 @@ struct Result {
   std::optional<Detection> detection;
   std::string mode = "GLOBAL", next_mode = "GLOBAL", branch = "NONE";
   int lost = 0;
+  double target_fov_ratio = 0.0, target_roi_fill = 0.0;
   std::optional<cv::Rect> roi;
   std::optional<cv::Point2f> predicted;
   bool homography_ok = false;
@@ -102,19 +113,22 @@ struct Result {
 class Tracker {
  public:
   Tracker(const std::string &global, const std::string &local, const std::string &classifier,
-          const Settings &settings);
+          const Settings &settings, const std::string &local_full_path = "");
   Result process(const cv::Mat &frame);
   void reset();
 
  private:
   Settings settings_;
   AppearanceDetector global_, local_;
+  std::unique_ptr<AppearanceDetector> separate_full_model_;
+  bool full_uses_global_ = false;
   MotionDetector motion_;
   std::unique_ptr<RelativeVelocity> state_;
+  cv::Size2f roi_target_size_, global_target_size_;
   cv::Mat previous_, previous_gray_;
   int lost_ = 0;
-  // Alternate full-frame search models while no target is being tracked.
-  bool search_local_ = false;
+  int search_frames_ = 0;
+  bool full_frame_tracking_ = false;
 };
 cv::Mat draw_result(const cv::Mat &frame, const Result &result);
 

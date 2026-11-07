@@ -7,7 +7,7 @@
     Learned guidance law (GRU policy) for vision-based UAV interception — C++ implementation.
     Uses ONNX Runtime for model inference (zero PyTorch dependency).
     Drop-in replacement for uav_vision_png: same topics, same state machine,
-    same CSV statistics format. Built-in PNG fallback on policy anomaly (watchdog)
+    same ROS statistics log markers and optional CSV format. Built-in PNG fallback on policy anomaly (watchdog)
     or when fallback_png:=true (A/B baseline mode).
   </description>
   <maintainer email="developer@uav.local">uav_dev</maintainer>
@@ -20,6 +20,9 @@
   <depend>uav_common_msg</depend>
 
   <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_cmake_pytest</test_depend>
+  <test_depend>ament_cmake_gtest</test_depend>
+  <test_depend>rclpy</test_depend>
   <test_depend>ament_lint_common</test_depend>
 
   <export>

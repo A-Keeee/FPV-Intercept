@@ -4,27 +4,62 @@ uav_ard_mav:
     result_topic: /camera_detect_result
     debug_topic: /uav_ard_mav/debug_image
     global_model: models/global_best.onnx
-    local_model: models/local_multiscale_ft_20261030.onnx
-    # local_model: models/global_best.onnx # Previous configuration: reuse the global detector locally.
-    # local_model: models/local_best.onnx
+    # local_model: models/local_multiscale_ft_20261030.onnx
+    # 旧配置：局部识别复用全局检测模型。
+    # local_model: models/global_best.onnx
+    # 原始局部模型，切换时将上方 local_model 的值替换为以下路径。
+    local_model: models/local_best.onnx
     classifier_model: models/Net_best.onnx
-    provider: cuda # cuda requires the ONNX Runtime CUDA provider and matching CUDA/cuDNN.
+    provider: cuda # 使用显卡需要支持 CUDA 的 ONNX Runtime，以及匹配的 CUDA/cuDNN。
     device_id: 0
     threads: 4
     publish_rate: 60.0
     image_timeout: 0.5
     show: true
-    # Initial display window size; the image keeps its aspect ratio and can be resized.
+    # 显示窗口的初始尺寸；保持图像宽高比，支持手动调整窗口大小。
     show_width: 960
     show_height: 540
     imgsz: 640
     global_conf: 0.3
     local_conf: 0.1
+    # ROI 的最小宽、高；实际尺寸还会根据已检测目标框扩大，不是固定裁剪尺寸。
     crop_size: 300
-    roi_growth: 4
-    local_patience: 3
+    # 目标尺寸的放大倍数，必须 >= 1.0；默认在宽、高上各保留 20% 的总余量。
+    # 全局检测框尺寸在本轮跟踪中作为下限，局部框变小也不会取消此下限。
+    roi_padding: 5.0
+    # 每漏检一个处理帧，ROI 宽、高各额外增加的像素数。
+    # 宽、高分别限制在原图范围内；必要时 ROI 可扩大到整幅图像。
+    roi_growth: 12
+    # 连续漏检 30 个处理帧后放弃预测 ROI，重新进行全图搜索。
+    local_patience: 15
+    # 大目标全图识别开关：true 开启 LOCAL_FULL；false 关闭，跟踪时始终使用 ROI。
+    # 关闭后 ROI 仍按目标尺寸扩大；首次发现、彻底丢失后的全图搜索不受此开关影响。
+    # 请使用 YAML 布尔值 true/false，不要写成字符串 t/f；修改后重启节点。
+    enable_local_full: false
+    # LOCAL_FULL 独立模型选择：global / local / local-multi，默认使用多尺度局部模型。
+    # 仅决定 LOCAL_FULL 的全图识别权重；三种选项分别读取下方对应路径。
+    # global 使用 global_conf；local 和 local-multi 使用 local_conf。修改后重启节点。
+    local_full_model: local
+    local_full_models:
+      global: models/global_best.onnx                    # 全局模型
+      local: models/local_best.onnx                      # 原始局部模型
+      local-multi: models/local_multiscale_ft_20261030.onnx # 多尺度局部模型
+    # 视场占比 = max(目标框宽/图像宽, 目标框高/图像高)。
+    # 占比达到进入阈值则转为 LOCAL_FULL，降至退出阈值后才允许恢复 ROI，避免频繁切换。
+    full_frame_enter_ratio: 0.05
+    full_frame_exit_ratio: 0.02
+    # 同时参考目标最长边相对基础 ROI 边长（crop_size 与图像宽高的最小值）的比例。
+    # 最长边达到基础边长乘进入阈值即可进入；恢复时需低于退出阈值，且视场占比也满足退出条件。
+    # enable_local_full 为 false 时，上述四个切换阈值均不参与模式切换。
+    roi_fill_enter_ratio: 0.50
+    roi_fill_exit_ratio: 0.30
+    # 全图搜索阶段：局部模型搜索 9 帧（LOCAL_MULTI）后，全局模型搜索 1 帧；设为 1 则只用全局模型。
+    global_search_interval: 10
+    # 光流、帧差、分类模型组成的运动后备检测在漏检时开销较大，默认关闭。
+    # 设为 true 可恢复运动级联；此开关不影响 ROI 的相机运动补偿。
+    motion_fallback: false
     kalman:
-      # Same implementation choices as tracking/configs/track_glad.yaml, not paper ground truth.
+      # 沿用原项目跟踪配置的卡尔曼参数，不代表论文的标准真值。
       process_noise: 0.01
       measurement_noise: 1.0
       initial_covariance: 1.0

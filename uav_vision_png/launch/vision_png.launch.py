@@ -1,60 +1,52 @@
-"""
-vision_png.launch.py
+"""Launch visual PNG; only explicit launch arguments override the YAML."""
 
-启动 uav_vision_png 节点，加载 config/params.yaml 参数文件。
+from pathlib import Path
 
-用法：
-  ros2 launch uav_vision_png vision_png.launch.py
-  ros2 launch uav_vision_png vision_png.launch.py speed_cmd:=8.0
-"""
-
-import os
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-from ament_index_python.packages import get_package_share_directory
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
-    pkg_share = get_package_share_directory('uav_vision_png')
-    params_file = os.path.join(pkg_share, 'config', 'params.yaml')
+    share = Path(get_package_share_directory('uav_vision_png'))
 
-    # 允许命令行覆盖关键参数
-    declare_speed = DeclareLaunchArgument(
-        'speed_cmd', default_value='5.0',
-        description='期望冲击速度上限 (m/s)')
-
-    declare_N = DeclareLaunchArgument(
-        'N_png', default_value='4.0',
-        description='比例导引系数（导航增益）')
-
-    declare_csv = DeclareLaunchArgument(
-        'csv_path',
-        default_value='/home/ake/SJTU/graduation-project/FPV-Intercept/vpng_intercept_stats.csv',
-        description='拦截统计 CSV 输出路径')
-
-    vision_png_node = Node(
-        package='uav_vision_png',
-        executable='uav_vision_png',
-        name='uav_vision_png',
-        output='screen',
-        parameters=[
-            params_file,
-            {
-                # 命令行参数可覆盖 yaml 中同名参数
-                'speed_cmd': LaunchConfiguration('speed_cmd'),
-                'N_png':     LaunchConfiguration('N_png'),
-                'csv_path':  LaunchConfiguration('csv_path'),
-            }
-        ],
-        # 打印节点完整输出（方便调试）
-        emulate_tty=True,
-    )
+    def start_node(context):
+        overrides = {}
+        for name, value_type in {
+            'speed_cmd': float,
+            'N_png': float,
+            'csv_path': str,
+            'record_csv': bool,
+        }.items():
+            if LaunchConfiguration(name).perform(context):
+                overrides[name] = ParameterValue(
+                    LaunchConfiguration(name), value_type=value_type)
+        return [Node(
+            package='uav_vision_png',
+            executable='uav_vision_png',
+            name='uav_vision_png',
+            output='screen',
+            parameters=[LaunchConfiguration('params_file'), overrides],
+            emulate_tty=True,
+        )]
 
     return LaunchDescription([
-        declare_speed,
-        declare_N,
-        declare_csv,
-        vision_png_node,
+        DeclareLaunchArgument(
+            'params_file', default_value=str(share / 'config/params.yaml')),
+        DeclareLaunchArgument(
+            'speed_cmd', default_value='',
+            description='Override YAML total speed limit (m/s)'),
+        DeclareLaunchArgument(
+            'N_png', default_value='',
+            description='Override YAML navigation gain'),
+        DeclareLaunchArgument(
+            'csv_path', default_value='',
+            description='Override YAML statistics CSV path'),
+        DeclareLaunchArgument(
+            'record_csv', default_value='',
+            description='Enable optional CSV export; default uses ROS logs'),
+        OpaqueFunction(function=start_node),
     ])

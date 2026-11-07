@@ -66,6 +66,11 @@ install(FILES config/params.yaml
 )
 
 if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(test_setpoint_limiter test/test_setpoint_limiter.cpp)
+  find_package(ament_cmake_pytest REQUIRED)
+  ament_add_pytest_test(test_statistics test/test_statistics.py TIMEOUT 90
+    ENV "VPNG_NODE_EXECUTABLE=$<TARGET_FILE:uav_vision_png>" "PYTHONDONTWRITEBYTECODE=1")
   find_package(ament_lint_auto REQUIRED)
   ament_lint_auto_find_test_dependencies()
 endif()
