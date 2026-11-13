@@ -86,14 +86,20 @@ std::vector<float> OnnxModel::run(const cv::Mat &blob, std::vector<int64_t> &sha
 }
 
 AppearanceDetector::AppearanceDetector(const std::string &path, const Settings &settings)
-    : model_(path, settings), imgsz_(settings.imgsz) {}
+    : model_(path, settings), imgsz_(settings.imgsz) {
+  // Initialize each detector's execution plan before accepting camera frames.
+  // Run the detector directly so warmup cannot change the tracker's state.
+  const cv::Mat warmup(imgsz_, imgsz_, CV_8UC3, cv::Scalar::all(114));
+  for (int i = 0; i < 3; ++i) detect_all(warmup, 0.0F);
+}
 
 std::vector<Detection> AppearanceDetector::detect_all(const cv::Mat &image, float confidence) {
-  // Match Ultralytics PT rect=True: scale up, then minimal stride-32 padding.
+  // Preserve the ROI's aspect ratio, but always pad to the same square tensor.
+  // Dynamic rectangular tensors rebuild CUDA execution plans as the ROI grows.
   const double ratio = std::min(double(imgsz_) / image.cols, double(imgsz_) / image.rows);
   const int width = int(std::nearbyint(image.cols * ratio));
   const int height = int(std::nearbyint(image.rows * ratio));
-  const int dw = (imgsz_ - width) % 32, dh = (imgsz_ - height) % 32;
+  const int dw = imgsz_ - width, dh = imgsz_ - height;
   const int left = int(std::nearbyint(dw / 2.0 - 0.1)), top = int(std::nearbyint(dh / 2.0 - 0.1));
   cv::Mat resized, padded;
   cv::resize(image, resized, {width, height});

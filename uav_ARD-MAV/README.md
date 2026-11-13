@@ -93,6 +93,11 @@ GMD/LMD 的分数为外观 CNN 的 MAV 概率，二分类选择 MAV（概率大�
 
 所有参数见 [`config/params.yaml`](config/params.yaml)，启动时读取，修改后重启节点。
 `imgsz` 须为不小于 160 的 32 倍数，以满足导出模型的固定 TopK=100。
+动态 ROI 仍按目标尺寸和漏检情况扩大；送入模型前等比例缩放，统一补边至
+`imgsz × imgsz`（默认 640×640），避免 ROI 宽高比变化触发 CUDA 输入尺寸切换卡顿。
+各已加载的 YOLO 检测模型在构造时预热 3 次，包括全局、局部，以及启用且使用独立权重的
+LOCAL_FULL 模型；复用已有模型时不重复预热。预热不更新跟踪状态，ROS 节点在预热完成后
+才订阅相机、启动处理线程并输出 ready 日志。启动会增加少量等待时间。
 `global_model`、`local_model`、`classifier_model` 的相对路径以安装后的包 share 目录为基准；可改用绝对路径。
 自定义相机话题可通过参数或 ROS remap 设置。
 
@@ -138,7 +143,7 @@ ros2 launch uav_ard_mav ard_mav.launch.py params_file:=/absolute/path/params.yam
    Shi-Tomasi/LK 速度与方向方差筛选，以及官方 32×32 外观 CNN。
    单应估计失败时拒绝运动候选；局部搜索仍可用相对速度预测。
 
-YOLO 使用 RGB、[0,1]、stride=32 的动态矩形 letterbox，解析 YOLO26 的 `[1,N,6]`
+YOLO 使用 RGB、[0,1]、等比例缩放后固定正方形补边的 letterbox，解析 YOLO26 的 `[1,N,6]`
 端到端 `xyxy,score,class` 输出，不套用旧 YOLOv5 解码或额外 NMS。
 全局取最高置信度，局部置信度相同时按预测距离排序。CNN 使用 BGR、[0,1]、类别 1 为 MAV；
 局部运动候选按预测距离选择。卡尔曼只用真实检测更新。
@@ -204,6 +209,8 @@ ROI 内目标变大、原图坐标比例、恢复 ROI、阈值回差及丢失/�
 以及非法选项拒绝、关闭模式时不加载额外权重。
 重识别回归测试另用两个微型 ONNX 测试模型，模拟全局模型持续漏检、local-multi 成功识别，
 验证多次丢失后立即使用 LOCAL_MULTI 重识别并恢复 ROI 跟踪；测试模型不用于节点推理。
+固定输入回归测试使用仅接受 640×640 的微型模型，检查横向、纵向、正方形及奇数补边的
+输入切换、检测框原图坐标还原，以及空白图像不受补边像素干扰。
 
 本机迁移验证（2026-10-29）：Release 构建与 5 项自动测试通过；`phantom12`、`phantom08`
 各前 300 帧的模式、检测分支、检测有无和丢失帧数均与原 Python 逐帧一致。

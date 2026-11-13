@@ -4,6 +4,41 @@
 
 #include "uav_ard_mav/tracker.hpp"
 
+TEST(AppearanceDetector, ChangingRoiAspectRatioKeepsFixedSquareInputAndOriginalCoordinates) {
+  ard_mav::Settings settings;
+  settings.provider = "cpu";
+  // This model only accepts 640x640, including during constructor warmup.
+  ard_mav::AppearanceDetector detector(
+      std::string(ARD_MAV_TEST_MODELS) + "/fixed_square_brightness.onnx", settings);
+  struct Example {
+    cv::Size image;
+    cv::Rect2f expected;
+  };
+  const std::vector<Example> examples{
+      {{640, 480}, {160, 160, 320, 160}},
+      {{480, 640}, {80, 240, 320, 160}},
+      {{300, 300}, {75, 112.5F, 150, 75}},
+      {{1920, 1080}, {480, 300, 960, 480}},
+      {{300, 600}, {0, 225, 300, 150}},
+      // The resized height is odd, so top and bottom padding differ by one.
+      {{640, 479}, {160, 160, 320, 160}},
+      {{640, 480}, {160, 160, 320, 160}},
+  };
+  for (const auto &example : examples) {
+    SCOPED_TRACE(example.image);
+    EXPECT_TRUE(detector.detect_all(cv::Mat::zeros(example.image, CV_8UC3), 0.1F).empty());
+    const auto detections = detector.detect_all(
+        cv::Mat(example.image, CV_8UC3, cv::Scalar::all(64)), 0.1F);
+    ASSERT_EQ(detections.size(), 1U);
+    const auto &box = detections.front().box;
+    EXPECT_NEAR(box.x, example.expected.x, 0.001);
+    EXPECT_NEAR(box.y, example.expected.y, 0.001);
+    EXPECT_NEAR(box.width, example.expected.width, 0.001);
+    EXPECT_NEAR(box.height, example.expected.height, 0.001);
+    EXPECT_NEAR(detections.front().score, 64.F / 255, 0.0001);
+  }
+}
+
 TEST(SearchRegion, GrowsAndShiftsAtImageEdges) {
   ard_mav::Settings s;
   EXPECT_EQ(ard_mav::search_region({639, -30}, 2, {640, 480}, s), cv::Rect(332, 0, 308, 308));

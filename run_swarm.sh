@@ -10,13 +10,15 @@
 set -e
 
 # -------------------------------------------------------
-# 0. 检查工作目录 & 依赖工具
+# 0. 定位 PX4 目录 & 检查依赖工具
 # -------------------------------------------------------
-if [ ! -f "build/px4_sitl_default/bin/px4" ]; then
-    echo "❌ 错误：请在 PX4-Autopilot 根目录下运行此脚本"
-    echo "   当前目录: $(pwd)"
+PX4_DIR="${PX4_DIR:-$HOME/PX4-Autopilot}"
+if [ ! -f "$PX4_DIR/build/px4_sitl_default/bin/px4" ]; then
+    echo "❌ 错误：未找到 PX4 可执行文件，请检查编译结果和 PX4_DIR"
+    echo "   PX4 目录: $PX4_DIR"
     exit 1
 fi
+cd "$PX4_DIR"
 
 if ! command -v rotatelogs &>/dev/null; then
     echo "❌ 错误：未找到 rotatelogs，请安装 apache2-utils"

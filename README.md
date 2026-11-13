@@ -185,6 +185,8 @@ PX4 目录可通过 `PX4_DIR=/path/to/PX4-Autopilot ./start.sh` 指定。
    # 只起飞并定点悬停：本地坐标 x=0、y=0，高度5m
    ros2 run uav_target_sim uav_target_sim --ros-args -p motion_mode:=hover -p takeoff_height:=5.0
 
+   ros2 run uav_target_sim uav_target_sim --ros-args -p motion_mode:=hover -p takeoff_height:=5.0 -p hover_x:=5.0 -p hover_y:=5.0
+
    # 定点缓慢自旋：位置不变，偏航角速度0.05rad/s（约2.9°/s）
    ros2 run uav_target_sim uav_target_sim --ros-args -p motion_mode:=spin -p yaw_rate:=0.05
 

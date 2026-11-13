@@ -19,6 +19,8 @@ uav_ard_mav:
     # 显示窗口的初始尺寸；保持图像宽高比，支持手动调整窗口大小。
     show_width: 960
     show_height: 540
+    # 动态 ROI 等比例缩放后统一补边为 imgsz × imgsz；默认固定 640×640 输入。
+    # 启动时每个已加载的 YOLO 检测模型预热 3 次，再开始接收图像。
     imgsz: 640
     global_conf: 0.3
     local_conf: 0.1

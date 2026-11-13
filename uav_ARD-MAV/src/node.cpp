@@ -87,7 +87,10 @@ class ArdMavNode : public rclcpp::Node {
       throw std::invalid_argument("image_timeout must be positive; publish_rate must be in (0,1000]");
     if (show_width_ < 1 || show_height_ < 1)
       throw std::invalid_argument("Require show_width > 0 and show_height > 0");
+    RCLCPP_INFO(get_logger(), "Loading and warming detector models (%s, fixed input %dx%d, 3 runs each)",
+                settings.provider.c_str(), settings.imgsz, settings.imgsz);
     tracker_ = std::make_unique<ard_mav::Tracker>(global, local, classifier, settings, full_model);
+    RCLCPP_INFO(get_logger(), "Detector warmup complete");
     const auto image_topic = declare_parameter<std::string>("image_topic", "/camera/image");
     publisher_ = create_publisher<uav_common_msg::msg::RectMsg>(
         declare_parameter<std::string>("result_topic", "/camera_detect_result"), 10);
